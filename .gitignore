@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# Secrets and local env
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Audio must never be committed (and capture must never write it)
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.pcm
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Test / tooling leftovers
+.cache/
