@@ -1,6 +1,7 @@
-"""Claude Agent SDK orchestration engine. Implemented in Sprint 4.
+"""Backend session ingress and, later, the orchestration engine.
 
-Receives the session transcript slice through the question (text), not a
-raw-audio dump of the meeting. Returns answer text that must be appended
-to the same session transcript before it is spoken.
+`receive` is the TLS WebSocket contract for session control and mixed PCM.
+`live` turns that audio into final utterances on the in-memory transcript.
+The Claude Agent SDK is Sprint 4 and is not in this package yet. Audio and
+transcript text are not written to disk or logged here.
 """

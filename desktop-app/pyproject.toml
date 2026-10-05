@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
     "sounddevice>=0.4.7",
+    "websockets>=13,<16",
 ]
 
 [project.optional-dependencies]

@@ -16,13 +16,19 @@ Living notes for the Board Knowledge Assistant. Expand as later sprints add tran
 - Phrase detection is `backend/stt/phrase_detector.py`. It returns a hit only when the configured phrase is present as whole words. A partial phrase, an empty configuration, or text inside a `[paused ...]` gap marker returns nothing. The detector keeps only a short tail so a phrase can span two text deltas, and it does not log that text. `desktop-app/wakeword/` is not a second matcher.
 - The production phrase is still an open Legal/product item. Callers pass it in; the detector does not choose one and does not read the environment.
 
+## Streaming and continuous STT (Sprint 3)
+
+- While a session is running, mixed PCM is sent over TLS to the backend WebSocket. Auth is a scoped bearer token or mutual TLS. The listener defaults to `127.0.0.1` and refuses to serve without a certificate. Placing that listener on a private VNet is still deployment; this repo does not provision one.
+- Pause stops audio on the wire and stops recognition. The transcript keeps a gap marker. Speech from the paused interval is not appended. Resume continues the same server session.
+- A transport or recognition failure stops further audio and does not flush a backlog. Capture that dies while running still pauses the local session and clears the jitter buffer.
+- Final utterances go into an in-memory transcript. A certain phrase freezes a slice through the end of the question. Recognition is not stopped to take that slice. Later meeting text stays on the live transcript. Uncertain detection does not freeze a slice.
+- Azure Speech is the production recognizer and hears unpaused session audio. Unit tests use a fake SDK and do not call Azure. Consent must match that posture.
+- The production trigger phrase is still an open Legal/product item.
+
 ## Still ahead of this code
 
-- While running, mixed audio is streamed over authenticated TLS to the private backend for **continuous STT**. Transcription does not pause for a question or an answer. Streaming and STT are not wired yet.
-- This expands what Azure Speech and the backend hear from "triggered question clip" to **unpaused session audio**. Consent must match that fact.
-- On a **certain** trigger phrase, analysis receives the **transcript text through the question**, not a raw-audio dump of the meeting. Uncertain detection → no analysis.
-- The assistant **response is appended to the same session transcript**, then spoken. Governed storage stores that running transcript (meeting text + assistant turns + gap markers). No raw audio field. Paused speech must not appear in the transcript (gap marker only). Stop finalizes the session and clears memory after the governed write.
-- Transport or STT failure fails closed: stop sending audio; do not flush a buffer of meeting audio. Capture that dies while a session is running already pauses the session and clears the buffer.
+- The assistant response is appended to the same session transcript, then spoken. Orchestration and TTS are not wired yet. The transcript can already store an assistant turn so a later slice includes it.
+- Governed storage stores the running transcript (meeting text + assistant turns + gap markers). No raw audio field. Stop finalizes the session and clears memory after that write.
 
 ## Still in force
 

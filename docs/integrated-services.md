@@ -2,7 +2,7 @@
 
 Catalog of every library and vendor this system uses or is planned to use, what data it touches, and which environment variables it needs. Credentials never go in source; copy [`.env.example`](../.env.example) to `.env` locally, or load the same names from Azure Key Vault in deployed environments.
 
-Sprint 1 capture and Sprint 2 session control are local-only. Cloud services below are wired in later sprints; their variables are listed now so local setup and Key Vault provisioning can stay ahead of the code.
+Sprint 1 capture and Sprint 2 session control are local-only. Sprint 3 streams mixed PCM over TLS to the backend; Azure Speech is the production recognizer, and unit tests do not call it. Other cloud services below are wired in later sprints. Their variables are listed now so local setup and Key Vault provisioning can stay ahead of the code.
 
 ## How to read this file
 
@@ -87,13 +87,14 @@ A separate audio wake-word vendor (e.g. Picovoice) is **not** the default now th
 
 | | |
 | --- | --- |
-| **Status** | Planned |
-| **Package** | `desktop-app/transport/` |
+| **Status** | Active |
+| **Package** | `desktop-app/transport/` client, `backend/orchestration/receive.py` server |
 | **Sprint** | 3 |
-| **Data** | Session control (start/pause/resume/stop) plus mixed PCM **while running**. Pause cuts the stream. Never logs the payload |
+| **Data** | Session control (start/pause/resume/stop) plus mixed PCM **while running**. Pause cuts the stream. A send failure drops unsent audio. Never logs the payload |
 | **Auth** | Mutual TLS **or** a scoped token — not a shared static key |
+| **Library** | `websockets` carries the TLS socket. It is not a second destination for meeting audio |
 
-Use one auth mode. Leave the unused variables empty.
+Use one auth mode. Leave the unused variables empty. The client and server take these values as constructor arguments; they do not read the environment themselves. The server binds to `BACKEND_BIND_HOST` (default `127.0.0.1`) and requires TLS. A private VNet is still a deployment step.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
@@ -112,12 +113,14 @@ Use one auth mode. Leave the unused variables empty.
 
 | | |
 | --- | --- |
-| **Status** | Planned |
-| **Package** | `backend/stt/` |
+| **Status** | Active |
+| **Package** | `backend/stt/speech.py`, `backend/stt/transcript.py` |
 | **Sprint** | 3 |
-| **Data** | Unpaused session audio in, running transcript out (meeting text). Pause stops recognition. Audio is not written to disk. Transcript is not logged at INFO or below |
+| **Data** | Unpaused session audio in, running transcript out (meeting text, pause gaps, frozen question slice). Pause stops recognition. Audio is not written to disk. Transcript is not logged at INFO or below |
 | **Region** | Prefer a private / approved Azure region; all traffic TLS |
-| **Posture** | Azure hears unpaused session audio, not only the question. See session-model.md |
+| **Posture** | Azure hears unpaused session audio, not only the question. See session-model.md. Tests inject a fake SDK and do not call Azure |
+
+Credentials are constructor arguments on `AzureSpeechAdapter`. The module does not read the environment.
 
 ### Azure Speech — streaming TTS
 
@@ -152,7 +155,7 @@ STT and TTS share one Speech resource.
 | **Data** | Transcript slice through the question, plus the extracted question. Routes to internal and/or external MCP tools. Does not merge those tools' contexts. Answer is appended to the session transcript |
 | **Network** | Anthropic API over TLS |
 
-Sprint 4 uses stub MCP tools. The same SDK instance stays the router when real tools replace the stubs.
+The Sprint 3 receiver also lives in this package. The Agent SDK itself is still Sprint 4, with stub MCP tools. That SDK instance stays the router when real tools replace the stubs.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |

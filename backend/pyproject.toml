@@ -7,7 +7,10 @@ name = "board-assistant-backend"
 version = "0.1.0"
 description = "Backend orchestration, speech, tools, and storage for the Board Knowledge Assistant"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "azure-cognitiveservices-speech>=1.40",
+    "websockets>=13,<16",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -20,6 +23,8 @@ dev = [
 include = ["orchestration*", "tools*", "stt*", "tts*", "storage*"]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q"
