@@ -45,16 +45,41 @@ def _stub_backed_query(fake_query, release: asyncio.Event | None = None):
     return fake_query(respond), asked
 
 
-def _live(orchestrator, on_answer=None):
+class FakeDelivery:
+    def __init__(self, fail: bool = False) -> None:
+        self.opened: list[str] = []
+        self.published: list[tuple[str, str]] = []
+        self.closed: list[str] = []
+        self._fail = fail
+
+    def open(self, session_id: str) -> None:
+        self.opened.append(session_id)
+
+    def publish(self, session_id: str, text: str) -> bool:
+        if self._fail:
+            raise RuntimeError("speaker unplugged")
+        self.published.append((session_id, text))
+        return True
+
+    def close(self, session_id: str) -> None:
+        self.closed.append(session_id)
+
+
+def _live(orchestrator, delivery=None):
     adapter = MemoryAdapter()
     session = LiveSession(
         SpeechToText(adapter),
         SessionTranscript(),
         PhraseDetector("board assistant"),
         orchestrator=orchestrator,
-        on_answer=on_answer,
+        delivery=delivery,
     )
     return session, adapter
+
+
+async def _stop(session) -> None:
+    await session.stop(_T2)
+    await session.wait_closed()
 
 
 async def _settle() -> None:
@@ -65,12 +90,8 @@ async def _settle() -> None:
 async def test_gate_stub_answer_lands_in_transcript_while_stt_continues(fake_query, caplog) -> None:
     release = asyncio.Event()
     query, asked = _stub_backed_query(fake_query, release)
-    delivered: list[str] = []
-
-    async def on_answer(text: str) -> None:
-        delivered.append(text)
-
-    session, adapter = _live(Orchestrator(query=query), on_answer)
+    delivery = FakeDelivery()
+    session, adapter = _live(Orchestrator(query=query), delivery)
     with caplog.at_level(logging.DEBUG):
         await session.start("session-1")
         adapter.emit("good morning everyone")
@@ -81,7 +102,7 @@ async def test_gate_stub_answer_lands_in_transcript_while_stt_continues(fake_que
         release.set()
         await _settle()
         adapter.emit("after the answer")
-        await session.stop(_T2)
+        await _stop(session)
 
     assert asked == ["what was Q3 revenue"]
     lines = session.transcript.render().splitlines()
@@ -91,7 +112,9 @@ async def test_gate_stub_answer_lands_in_transcript_while_stt_continues(fake_que
     assert "[source: external news (stub)]" in assistant[0]
     assert lines.index("while we wait, next item") < lines.index(assistant[0])
     assert lines.index(assistant[0]) < lines.index("after the answer")
-    assert delivered == [assistant[0].removeprefix("Assistant: ")]
+    assert delivery.opened == ["session-1"]
+    assert delivery.published == [("session-1", assistant[0].removeprefix("Assistant: "))]
+    assert delivery.closed == ["session-1"]
     assert adapter.stop_calls == 1
     assert "Q3 revenue" not in caplog.text
     assert "12.4" not in caplog.text
@@ -103,7 +126,7 @@ async def test_phrase_without_question_does_not_call_the_agent(fake_query) -> No
     await session.start("session-1")
     adapter.emit("board assistant")
     adapter.emit("um")
-    await session.stop(_T2)
+    await _stop(session)
     assert asked == []
     assert "Assistant:" not in session.transcript.render()
 
@@ -111,12 +134,8 @@ async def test_phrase_without_question_does_not_call_the_agent(fake_query) -> No
 async def test_answer_arriving_during_pause_is_not_appended_or_delivered(fake_query) -> None:
     release = asyncio.Event()
     query, _asked = _stub_backed_query(fake_query, release)
-    delivered: list[str] = []
-
-    async def on_answer(text: str) -> None:
-        delivered.append(text)
-
-    session, adapter = _live(Orchestrator(query=query), on_answer)
+    delivery = FakeDelivery()
+    session, adapter = _live(Orchestrator(query=query), delivery)
     await session.start("session-1")
     adapter.emit("board assistant what was Q3 revenue")
     await _settle()
@@ -124,21 +143,18 @@ async def test_answer_arriving_during_pause_is_not_appended_or_delivered(fake_qu
     release.set()
     await _settle()
     await session.resume(_T2)
-    await session.stop(_T2)
+    await _stop(session)
     assert "Assistant:" not in session.transcript.render()
-    assert delivered == []
+    assert delivery.published == []
 
 
 async def test_delivery_failure_keeps_the_assistant_turn(fake_query) -> None:
     query, _asked = _stub_backed_query(fake_query)
 
-    async def broken(text: str) -> None:
-        raise RuntimeError("speaker unplugged")
-
-    session, adapter = _live(Orchestrator(query=query), broken)
+    session, adapter = _live(Orchestrator(query=query), FakeDelivery(fail=True))
     await session.start("session-1")
     adapter.emit("board assistant what was Q3 revenue")
-    await session.stop(_T2)
+    await _stop(session)
     assert "Assistant: [source: internal data (stub)]" in session.transcript.render()
 
 
@@ -154,7 +170,7 @@ async def test_stop_cancels_an_answer_that_never_finishes(fake_query) -> None:
     )
     await session.start("session-1")
     adapter.emit("board assistant what was Q3 revenue")
-    await session.stop(_T2)
+    await _stop(session)
     assert "Assistant:" not in session.transcript.render()
 
 
@@ -170,8 +186,8 @@ async def test_live_agent_sdk_answers_from_the_stubs() -> None:
     await session.start("session-1")
     adapter.emit("good morning everyone")
     adapter.emit("board assistant what was Q3 revenue")
-    adapter.emit("next agenda item")
-    await session.stop(_T2)
+    adapter.emit("next item on the agenda")
+    await _stop(session)
     rendered = session.transcript.render()
     assert "Assistant: " in rendered
     assert "12.4" in rendered

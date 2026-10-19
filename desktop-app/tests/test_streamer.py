@@ -112,3 +112,68 @@ async def _wait_for(predicate, timeout: float = 2.0) -> None:
         if time.monotonic() >= deadline:
             raise TimeoutError("streamer condition not met")
         await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_capture_is_silenced_while_an_answer_plays() -> None:
+    socket = FakeSocket()
+    client = BackendClient(FakeConnector(socket))
+    session = FakeSession([b"\x05\x06", b"\x07\x08", b"\x09\x0a"])
+    muted = {"on": False}
+
+    def is_muted() -> bool:
+        return muted["on"]
+
+    streamer = SessionStreamer(session, client, muted=is_muted)
+    muted["on"] = True
+    await streamer.start()
+    await _wait_for(lambda: len([s for s in socket.sent if isinstance(s, bytes)]) == 3)
+    audio = [s for s in socket.sent if isinstance(s, bytes)]
+    assert audio == [b"\x00\x00", b"\x00\x00", b"\x00\x00"]
+    await streamer.stop()
+
+
+@pytest.mark.asyncio
+async def test_playback_starts_with_the_session_and_outlives_stop() -> None:
+    import asyncio
+
+    class Playback:
+        def __init__(self) -> None:
+            self.session_ids: list[str] = []
+            self.release = asyncio.Event()
+            self.finished = False
+
+        async def run(self, session_id: str) -> None:
+            self.session_ids.append(session_id)
+            await self.release.wait()
+            self.finished = True
+
+    socket = FakeSocket()
+    client = BackendClient(FakeConnector(socket))
+    playback = Playback()
+    streamer = SessionStreamer(FakeSession([b"\x01\x02"]), client, playback=playback)
+    await streamer.start()
+    await _wait_for(lambda: playback.session_ids == ["session-1"])
+    await streamer.pause()
+    await streamer.resume()
+    await streamer.stop()
+    assert not playback.finished, "Stop must not cut playback"
+    playback.release.set()
+    await streamer.wait_playback()
+    assert playback.finished
+
+
+@pytest.mark.asyncio
+async def test_wait_playback_gives_up_after_the_grace_period() -> None:
+    import asyncio
+
+    class Stuck:
+        async def run(self, session_id: str) -> None:
+            await asyncio.Event().wait()
+
+    client = BackendClient(FakeConnector(FakeSocket()))
+    streamer = SessionStreamer(FakeSession([]), client, playback=Stuck(), playback_grace=0.05)
+    await streamer.start()
+    await streamer.stop()
+    await asyncio.wait_for(streamer.wait_playback(), timeout=1)
+    await streamer.wait_playback()

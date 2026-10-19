@@ -34,6 +34,17 @@ Living notes for the Board Knowledge Assistant. Expand as later sprints add tran
 - Answering runs in the background. Recognition is not paused or awaited. An answer that returns while the session is paused is dropped, because the transcript refuses turns during a pause and nothing is delivered that is not in the transcript.
 - Sprint 4 tools are stubs with fixed responses. They see only the question.
 
+## Spoken delivery (Sprint 5)
+
+- Answer text that is already on the transcript is sent to Azure Speech TTS (same Speech resource as STT). Azure is configured with no audio output, so nothing plays on the server, and the PCM stays in memory.
+- Answer audio goes to the desktop on a separate playback WebSocket at `/playback`, on the same TLS listener and with the same bearer-token check as capture. The client sends one subscribe frame for a session id; it is accepted only for a session whose capture has started and has not finished draining, and only one playback socket per session. Session ids are random UUIDs. Any further client frame closes the socket. Unknown paths get 404.
+- The capture client stays upload-only and fail-closed. A playback failure never affects capture, and a capture failure does not stop an answer that is already playing.
+- While an answer plays, the desktop sends silence instead of the mix, so the answer is not sent to Azure STT as meeting speech or re-triggered.
+- A capture socket that closes without Stop now stops its session, so recognition does not keep running.
+- Neither side writes answer audio or transcript text to disk. The backend prints the transcript to its console only with the gate flag `--print-transcript`.
+- Each capture connection gets its own transcript, recognizer and detector (`ReceiveServer(sink_factory=...)`), so sessions never share a transcript.
+- Known gap: the entry points support bearer-token mode only. In mutual-TLS mode the receiver still requires a bearer token, which the desktop does not send.
+
 ## Still ahead of this code
 - Governed storage stores the running transcript (meeting text + assistant turns + gap markers). No raw audio field. Stop finalizes the session and clears memory after that write.
 

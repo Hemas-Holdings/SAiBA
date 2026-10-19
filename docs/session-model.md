@@ -82,6 +82,14 @@ If TTS fails after the text was appended, the transcript still contains the answ
 
 Orchestration runs in the background (Sprint 4). Meeting text keeps landing while an answer is pending, so the assistant turn is appended where the answer arrives, after any meeting text spoken while it was being prepared. An answer that arrives during a pause is dropped rather than appended inside the gap. A phrase with nothing after it but filler is not a question and does not call the orchestrator.
 
+### Spoken delivery (Sprint 5)
+
+- The answer is spoken only after it is in the transcript. The audio comes back on a **separate, receive-only playback socket** (`/playback`), not the capture socket. The desktop subscribes once with its session id and then only receives.
+- **Pause and Stop do not cut an answer that is already playing.** They act on capture only. Stop ends recognition at once. Answers still being prepared at Stop finish, are appended, and are spoken; then the backend ends playback for that session.
+- **Capture is muted while an answer plays**, plus a short tail. The desktop sends silence instead of the mix, because loopback records the laptop speaker and the answer would otherwise be transcribed as meeting speech and could set off the trigger. Anything said over the answer is therefore not transcribed. This is not a pause: no gap marker is written.
+- Answers are spoken one at a time, in order. A TTS failure is reported to the desktop; the transcript keeps the answer.
+- If the capture socket drops without Stop, the backend stops that session so nothing keeps listening.
+
 ---
 
 ## Audio and STT placement

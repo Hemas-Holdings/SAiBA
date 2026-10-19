@@ -126,12 +126,12 @@ Credentials are constructor arguments on `AzureSpeechAdapter`. The module does n
 
 | | |
 | --- | --- |
-| **Status** | Planned |
-| **Package** | `backend/tts/` |
+| **Status** | Implemented (Sprint 5) |
+| **Package** | `backend/tts/` (`speech.py`); playback in `backend/orchestration/playback.py` and `desktop-app/playback/` |
 | **Sprint** | 5 |
-| **Data** | Answer text in, streaming audio bytes out. Audio is not persisted |
+| **Data** | Answer text in (already on the transcript), raw 16 kHz mono PCM out, streamed to the desktop playback socket. Audio is not persisted |
 
-STT and TTS share one Speech resource.
+STT and TTS share one Speech resource. Credentials are constructor arguments on `AzureSpeechSynthesisAdapter`; only `python -m orchestration` reads the environment.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |

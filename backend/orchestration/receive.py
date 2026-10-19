@@ -1,13 +1,17 @@
-"""TLS receiving endpoint for session control and mixed PCM.
+"""TLS endpoints for session control, mixed PCM, and answer playback.
 
 Accepts a WebSocket only with a server certificate. Token mode checks a
 bearer token; mutual TLS requires a client certificate at the TLS layer.
-Binary frames are accepted only while that session is running. They are
-handed to an injected sink and are not written to disk or logged.
+
+`/` is the capture socket: binary frames are accepted only while that
+session is running and are handed to a sink, never written to disk or
+logged. `/playback` is a separate receive-only socket: the client sends one
+subscribe frame for a live session id, then only receives answer audio.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -24,6 +28,9 @@ DEFAULT_BIND_HOST = "127.0.0.1"
 DEFAULT_BIND_PORT = 8443
 _SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _ACTIONS = {"start", "pause", "resume", "stop"}
+CAPTURE_PATH = "/"
+PLAYBACK_PATH = "/playback"
+_SUBSCRIBE_TIMEOUT = 10.0
 
 
 class SessionSink(Protocol):
@@ -43,6 +50,14 @@ class SessionSink(Protocol):
 
     async def stop(self, at: datetime) -> None:
         """End recognition."""
+
+
+class PlaybackRegistry(Protocol):
+    """Where a playback socket is bound to its session. See orchestration.playback."""
+
+    def attach(self, session_id: str, subscriber: object) -> bool: ...
+
+    def detach(self, session_id: str, subscriber: object) -> None: ...
 
 
 class Phase(Enum):
@@ -163,6 +178,16 @@ class ReceiveSession:
         logger.info("receive session resumed")
         return {"ok": True}
 
+    async def abandon(self) -> None:
+        """The socket closed without Stop: stop the session so nothing keeps listening."""
+
+        if self._phase in (Phase.RUNNING, Phase.PAUSED):
+            logger.warning("receive session abandoned; stopping")
+            try:
+                await self._stop()
+            except Exception:
+                logger.warning("receive session stop on abandon failed")
+
     async def _stop(self) -> dict[str, object]:
         if self._phase is Phase.STOPPED:
             return {"ok": False, "error": "rejected"}
@@ -177,16 +202,22 @@ class ReceiveServer:
 
     def __init__(
         self,
-        sink: SessionSink,
+        sink: SessionSink | None,
         verifier: TokenVerifier,
         ssl_context: ssl.SSLContext,
         host: str = DEFAULT_BIND_HOST,
         port: int = DEFAULT_BIND_PORT,
         clock: Callable[[], datetime] | None = None,
+        sink_factory: Callable[[], SessionSink] | None = None,
+        playback: PlaybackRegistry | None = None,
     ) -> None:
         if ssl_context is None:
             raise ValueError("TLS context is required")
+        if (sink is None) == (sink_factory is None):
+            raise ValueError("pass exactly one of sink or sink_factory")
         self._sink = sink
+        self._sink_factory = sink_factory
+        self._playback = playback
         self._verifier = verifier
         self._ssl_context = ssl_context
         self._host = host
@@ -220,25 +251,71 @@ class ReceiveServer:
 
     def _process_request(self, connection: object, request: object) -> object | None:
         headers = getattr(request, "headers", {})
-        if self._verifier.allow(headers):
-            return None
-        logger.info("handshake rejected")
         respond = getattr(connection, "respond", None)
-        if respond is None:
+        if not self._verifier.allow(headers):
+            logger.info("handshake rejected")
+            return respond(401, "Unauthorized") if respond is not None else None
+        path = _path_of(request)
+        if path == CAPTURE_PATH or (path == PLAYBACK_PATH and self._playback is not None):
             return None
-        return respond(401, "Unauthorized")
+        logger.info("handshake rejected unknown path")
+        return respond(404, "Not Found") if respond is not None else None
 
     async def _handler(self, connection: object) -> None:
-        session = ReceiveSession(self._sink, self._clock)
-        async for message in connection:  # type: ignore[attr-defined]
-            try:
-                reply = await session.handle(message)
-            except Exception:
-                logger.warning("receive frame failed closed")
+        if _path_of(getattr(connection, "request", None)) == PLAYBACK_PATH:
+            await self._playback_handler(connection)
+            return
+        await self._capture_handler(connection)
+
+    async def _playback_handler(self, connection: object) -> None:
+        registry = self._playback
+        if registry is None:
+            return
+        try:
+            first = await asyncio.wait_for(connection.recv(), timeout=_SUBSCRIBE_TIMEOUT)  # type: ignore[attr-defined]
+        except Exception:
+            logger.info("playback subscribe not received")
+            return
+        try:
+            session_id = parse_subscribe(first)
+        except ValueError:
+            logger.info("playback subscribe rejected")
+            await _reply(connection, {"ok": False, "error": "bad_message"})
+            return
+        subscriber = _PlaybackSocket(connection)
+        if not registry.attach(session_id, subscriber):
+            logger.info("playback subscribe rejected unknown session")
+            await _reply(connection, {"ok": False, "error": "unknown_session"})
+            return
+        try:
+            await _reply(connection, {"ok": True})
+            # Receive-only: any further client frame ends the subscription.
+            async for _message in connection:  # type: ignore[attr-defined]
+                logger.info("playback client frame rejected")
                 break
-            if reply is None:
-                continue
-            await connection.send(json.dumps(reply, separators=(",", ":")))  # type: ignore[attr-defined]
+        except Exception:
+            logger.info("playback socket ended")
+        finally:
+            registry.detach(session_id, subscriber)
+
+    async def _capture_handler(self, connection: object) -> None:
+        sink = self._sink_factory() if self._sink_factory is not None else self._sink
+        assert sink is not None
+        session = ReceiveSession(sink, self._clock)
+        try:
+            async for message in connection:  # type: ignore[attr-defined]
+                try:
+                    reply = await session.handle(message)
+                except Exception:
+                    logger.warning("receive frame failed closed")
+                    break
+                if reply is None:
+                    continue
+                await connection.send(json.dumps(reply, separators=(",", ":")))  # type: ignore[attr-defined]
+        except Exception:
+            logger.info("capture socket ended")
+        finally:
+            await session.abandon()
 
 
 def parse_control(text: str) -> tuple[str, str]:
@@ -259,6 +336,49 @@ def parse_control(text: str) -> tuple[str, str]:
     if not isinstance(session_id, str) or _SESSION_ID.fullmatch(session_id) is None:
         raise ValueError("session id is not allowed")
     return action, session_id
+
+
+def parse_subscribe(text: str | bytes) -> str:
+    """Return the session id of a playback subscribe frame. Extra fields are rejected."""
+
+    if not isinstance(text, str):
+        raise ValueError("subscribe frame is not text")
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("subscribe frame is not json") from exc
+    if not isinstance(payload, dict) or set(payload) != {"action", "session_id"}:
+        raise ValueError("subscribe frame has unexpected fields")
+    session_id = payload["session_id"]
+    if payload["action"] != "subscribe":
+        raise ValueError("subscribe action is not allowed")
+    if not isinstance(session_id, str) or _SESSION_ID.fullmatch(session_id) is None:
+        raise ValueError("session id is not allowed")
+    return session_id
+
+
+class _PlaybackSocket:
+    """Hub-facing wrapper over one playback connection. Does not log payloads."""
+
+    def __init__(self, connection: object) -> None:
+        self._connection = connection
+
+    async def send(self, data: str | bytes) -> None:
+        await self._connection.send(data)  # type: ignore[attr-defined]
+
+    async def close(self) -> None:
+        await self._connection.close()  # type: ignore[attr-defined]
+
+
+async def _reply(connection: object, body: dict[str, object]) -> None:
+    await connection.send(json.dumps(body, separators=(",", ":")))  # type: ignore[attr-defined]
+
+
+def _path_of(request: object) -> str:
+    path = getattr(request, "path", None)
+    if not isinstance(path, str):
+        return CAPTURE_PATH
+    return path.split("?", 1)[0] or CAPTURE_PATH
 
 
 def _bearer_token(headers: Mapping[str, str]) -> str | None:

@@ -25,6 +25,8 @@ jobs:
           --cov=capture
           --cov=session
           --cov=transport
+          --cov=playback
+          --cov=ui
           --cov-report=term-missing
           --cov-fail-under=80
           -m "not integration"
@@ -51,6 +53,7 @@ jobs:
           --cov=stt
           --cov=orchestration
           --cov=tools
+          --cov=tts
           --cov-report=term-missing
           --cov-fail-under=80
           -m "not integration"

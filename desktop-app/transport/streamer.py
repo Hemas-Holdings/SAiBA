@@ -2,17 +2,21 @@
 
 Listens to the local session controller. Pause and Stop stay local actions
 on that controller; this module only reports the resulting state. A transport
-failure stops forwarding and does not drain remaining audio. This module
-does not write audio to disk or log samples.
+failure stops forwarding and does not drain remaining audio. While an answer
+is playing (`muted`), silence of the same length is sent instead of the mix,
+so the answer is not transcribed back as meeting speech. The playback
+client runs beside capture: Pause, Resume and Stop do not cut it. This
+module does not write audio to disk or log samples.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Protocol
 
+from capture.audio_format import SAMPLE_WIDTH, silence
 from session.controller import SessionState
 from transport.client import BackendClient, TransportError
 
@@ -42,13 +46,29 @@ class LocalSession(Protocol):
         """Yield mixed PCM only while the session is running."""
 
 
-class SessionStreamer:
-    """Tie a local session to a backend client."""
+class PlaybackRunner(Protocol):
+    async def run(self, session_id: str) -> None:
+        """Play the session's answers until the backend ends playback."""
 
-    def __init__(self, controller: LocalSession, client: BackendClient) -> None:
+
+class SessionStreamer:
+    """Tie a local session to a backend client and, optionally, playback."""
+
+    def __init__(
+        self,
+        controller: LocalSession,
+        client: BackendClient,
+        playback: PlaybackRunner | None = None,
+        muted: Callable[[], bool] | None = None,
+        playback_grace: float = 90.0,
+    ) -> None:
         self._controller = controller
         self._client = client
+        self._playback = playback
+        self._muted = muted
+        self._playback_grace = playback_grace
         self._forward: asyncio.Task[None] | None = None
+        self._playback_task: asyncio.Task[None] | None = None
 
     async def start(self) -> SessionState:
         """Start local capture, then the remote session. Capture stops if the link fails."""
@@ -65,6 +85,10 @@ class SessionStreamer:
             await self._controller.pause()
             raise
         self._forward = asyncio.create_task(self._forward_audio(), name="session-stream")
+        if self._playback is not None:
+            self._playback_task = asyncio.create_task(
+                self._playback.run(session_id), name="session-playback"
+            )
         return state
 
     async def pause(self) -> SessionState:
@@ -88,10 +112,26 @@ class SessionStreamer:
         await self._client.stop_session()
         return state
 
+    async def wait_playback(self) -> None:
+        """After Stop: let answers still playing finish, up to the grace period."""
+
+        task = self._playback_task
+        self._playback_task = None
+        if task is None:
+            return
+        _done, pending = await asyncio.wait({task}, timeout=self._playback_grace)
+        for late in pending:
+            late.cancel()
+            logger.warning("playback did not end in time; cancelled")
+        await asyncio.gather(task, return_exceptions=True)
+
     async def _forward_audio(self) -> None:
         chunks = self._controller.chunks()
         try:
             async for chunk in chunks:
+                if self._muted is not None and self._muted():
+                    # An answer is playing: keep the stream's clock, drop the echo.
+                    chunk = silence(len(chunk) // SAMPLE_WIDTH)
                 try:
                     await self._client.send_audio(chunk)
                 except TransportError:

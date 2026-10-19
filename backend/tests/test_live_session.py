@@ -72,3 +72,51 @@ async def test_phrase_at_utterance_end_waits_and_a_gap_does_not_finish_it() -> N
     assert "not in the transcript" not in (frozen or "")
     assert adapter.stop_calls == 0
     await session.stop(_T2)
+
+
+@pytest.mark.asyncio
+async def test_stop_returns_before_a_slow_answer_and_closes_delivery_after_it() -> None:
+    import asyncio
+
+    release = asyncio.Event()
+
+    class SlowOrchestrator:
+        async def answer(self, transcript_slice: str, question: str) -> str:
+            await release.wait()
+            return "the answer"
+
+    class Delivery:
+        def __init__(self) -> None:
+            self.events: list[str] = []
+
+        def open(self, session_id: str) -> None:
+            self.events.append(f"open {session_id}")
+
+        def publish(self, session_id: str, text: str) -> bool:
+            self.events.append(f"publish {text}")
+            return True
+
+        def close(self, session_id: str) -> None:
+            self.events.append(f"close {session_id}")
+
+    adapter = MemoryAdapter()
+    delivery = Delivery()
+    closed: list[str] = []
+    session = LiveSession(
+        SpeechToText(adapter),
+        SessionTranscript(),
+        PhraseDetector("board assistant"),
+        orchestrator=SlowOrchestrator(),
+        delivery=delivery,
+        on_closed=lambda transcript: closed.append(transcript.render()),
+    )
+    await session.start("session-9")
+    adapter.emit("board assistant what was revenue")
+    await asyncio.sleep(0)
+    await asyncio.wait_for(session.stop(_T2), timeout=0.5)
+    assert adapter.stop_calls == 1
+    assert delivery.events == ["open session-9"]
+    release.set()
+    await session.wait_closed()
+    assert delivery.events == ["open session-9", "publish the answer", "close session-9"]
+    assert "Assistant: the answer" in closed[0]

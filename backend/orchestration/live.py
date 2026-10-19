@@ -4,15 +4,18 @@ Final utterances are appended while the session is running. Pause stops
 recognition and records a gap instead of speech. A certain phrase freezes
 the question slice and does not stop recognition. When an orchestrator is
 set, each frozen slice is answered in the background and the answer is
-appended as an assistant turn while meeting text keeps arriving. Audio and
-transcript text are not written to disk or logged.
+appended as an assistant turn while meeting text keeps arriving, then
+handed to delivery for speech. Stop ends recognition at once; answers
+already being prepared still finish and are delivered before the session's
+delivery channel closes. Audio and transcript text are not written to disk
+or logged.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import datetime
 from typing import Protocol
 
@@ -23,11 +26,18 @@ from stt.transcript import SessionTranscript
 
 logger = logging.getLogger(__name__)
 
-AnswerHook = Callable[[str], Awaitable[None]]
-
-
 class Answerer(Protocol):
     async def answer(self, transcript_slice: str, question: str) -> str: ...
+
+
+class AnswerDelivery(Protocol):
+    """Speaks answers that are already on the transcript. Must not block."""
+
+    def open(self, session_id: str) -> None: ...
+
+    def publish(self, session_id: str, text: str) -> bool: ...
+
+    def close(self, session_id: str) -> None: ...
 
 
 class LiveSession:
@@ -39,15 +49,19 @@ class LiveSession:
         transcript: SessionTranscript,
         detector: PhraseDetector,
         orchestrator: Answerer | None = None,
-        on_answer: AnswerHook | None = None,
+        delivery: AnswerDelivery | None = None,
         answer_timeout: float = 60.0,
+        on_closed: Callable[[SessionTranscript], None] | None = None,
     ) -> None:
         self._speech = speech
         self._transcript = transcript
         self._detector = detector
         self._orchestrator = orchestrator
-        self._on_answer = on_answer
+        self._delivery = delivery
         self._answer_timeout = answer_timeout
+        self._on_closed = on_closed
+        self._session_id: str | None = None
+        self._closing: asyncio.Task[None] | None = None
         self._pause_open = False
         self._reader: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -56,8 +70,10 @@ class LiveSession:
         self.transcript = transcript
 
     async def start(self, session_id: str) -> None:
-        del session_id
+        self._session_id = session_id
         self._loop = asyncio.get_running_loop()
+        if self._delivery is not None:
+            self._delivery.open(session_id)
         self._speech.set_listener(self._on_final)
         stream = await self._speech.start_session()
         self._reader = asyncio.create_task(self._drain(stream), name="live-transcript")
@@ -88,8 +104,24 @@ class LiveSession:
         self._reader = None
         if reader is not None:
             await reader
-        await self._finish_answers()
+        # Do not hold up the Stop reply: answers finish in the background.
+        self._closing = asyncio.create_task(self._close_after_answers(), name="live-close")
         logger.info("live session stopped")
+
+    async def wait_closed(self) -> None:
+        """Return once answers in flight at Stop are done and delivery is closed."""
+
+        closing = self._closing
+        if closing is not None:
+            await closing
+
+    async def _close_after_answers(self) -> None:
+        await self._finish_answers()
+        if self._delivery is not None and self._session_id is not None:
+            self._delivery.close(self._session_id)
+        if self._on_closed is not None:
+            self._on_closed(self._transcript)
+        logger.info("live session closed")
 
     async def _finish_answers(self) -> None:
         # Let tasks scheduled from a recognizer thread start before waiting.
@@ -143,8 +175,8 @@ class LiveSession:
             return
         self._transcript.append_assistant(answer)
         logger.info("assistant turn appended")
-        if self._on_answer is not None:
+        if self._delivery is not None and self._session_id is not None:
             try:
-                await self._on_answer(answer)
+                self._delivery.publish(self._session_id, answer)
             except Exception as error:  # noqa: BLE001 - delivery never removes the turn
                 logger.warning("answer delivery failed error=%s", type(error).__name__)

@@ -50,3 +50,24 @@ python -m capture --duration 10
 **Gate:** remote (loopback) speech and in-room (microphone) speech are both clearly audible in the mixed stream.
 
 CI runs unit tests on every push and pull request (`.github/workflows/ci.yml`). Integration tests that open real devices are opt-in (`RUN_LIVE_AUDIO=1`) and excluded from CI.
+
+## Sprint 5 — Spoken answers (round-trip gate)
+
+Two processes on one Windows test machine. Settings come from the environment or `--env-file` (see `.env.example`).
+
+Create a local certificate for `127.0.0.1` (self-signed is fine for the gate), then set `TLS_CERT_PATH`, `TLS_KEY_PATH`, `TLS_CA_CERT_PATH` (the same certificate, so the desktop trusts it), `BACKEND_AUTH_TOKEN`, `BACKEND_BASE_URL=wss://127.0.0.1:8443`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `TRIGGER_PHRASE` and `ANTHROPIC_API_KEY`.
+
+```bash
+# console 1: backend (prints the transcript when the session closes)
+cd backend
+python -m orchestration --env-file ../.env --print-transcript
+
+# console 2: local controls — s start, p pause, r resume, q stop (each + Enter)
+cd desktop-app
+python -m ui --env-file ../.env          # add --mic-only off Windows
+```
+
+**Gate:** Start, speak, say the trigger phrase and a question; the answer is spoken (once, no echo re-trigger) and appears as an `Assistant:` line. Pause, speak, Resume: the paused speech is missing and a `[paused …]` marker is present. Press Stop while an answer is playing: it finishes. Nothing is written to disk.
+
+Optional live checks: `pytest -m integration tests/test_tts_live.py` (Azure TTS through the speakers, `RUN_LIVE_AUDIO=1`) and `pytest -m integration tests/test_orchestration_integration.py` (real Agent SDK).
+
