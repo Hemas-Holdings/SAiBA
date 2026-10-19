@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from stt.phrase_detector import PhraseHit
+from stt.text import last_phrase_end, words
 
 
 @dataclass(frozen=True)
@@ -80,26 +81,31 @@ class SessionTranscript:
             return
         self._entries.append(_Entry("assistant", text.strip()))
 
-    def observe_utterance(self, text: str, hit: PhraseHit | None) -> None:
+    def observe_utterance(self, text: str, hit: PhraseHit | None) -> PhraseHit | None:
         """Append a final utterance and maybe freeze the question slice.
 
+        Returns the hit whose slice was frozen by this utterance, else None.
         Recognition is not stopped here. A gap does not close a question.
         """
 
         if self._paused or not text.strip():
-            return
+            return None
         self.append_meeting(text)
+        frozen: PhraseHit | None = None
         if self._waiting_hit is not None:
-            self._freeze(self._waiting_hit)
+            frozen = self._waiting_hit
+            self._freeze(frozen)
             self._waiting_hit = None
             self._previous_utterance = text
-            return
+            return frozen
         if hit is not None:
             if _closes_now(self._previous_utterance, text, hit.phrase):
+                frozen = hit
                 self._freeze(hit)
             else:
                 self._waiting_hit = hit
         self._previous_utterance = text
+        return frozen
 
     def slice_through_question(self, phrase_hit: PhraseHit) -> str | None:
         """Return the frozen slice, or None if that question has not ended."""
@@ -130,28 +136,11 @@ def _require_aware(value: datetime) -> None:
         raise ValueError("timestamps must be timezone-aware")
 
 
-def _words(text: str) -> list[str]:
-    characters: list[str] = []
-    for character in text.casefold():
-        if character.isalnum() or character.isspace():
-            characters.append(character)
-        else:
-            characters.append(" ")
-    return "".join(characters).split()
-
-
 def _closes_now(previous: str, utterance: str, phrase: str) -> bool:
     """True when this utterance continues past the phrase."""
 
-    phrase_words = _words(phrase)
-    if not phrase_words:
+    window = words(f"{previous} {utterance}")
+    end = last_phrase_end(window, words(phrase))
+    if end is None:
         return False
-    window = _words(f"{previous} {utterance}")
-    last: int | None = None
-    limit = len(window) - len(phrase_words) + 1
-    for index in range(limit):
-        if window[index : index + len(phrase_words)] == phrase_words:
-            last = index
-    if last is None:
-        return False
-    return last + len(phrase_words) < len(window)
+    return end < len(window)

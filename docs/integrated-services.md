@@ -149,18 +149,32 @@ STT and TTS share one Speech resource.
 
 | | |
 | --- | --- |
-| **Status** | Planned |
-| **Package** | `backend/orchestration/` |
+| **Status** | Implemented (Sprint 4, stub tools) |
+| **Package** | `backend/orchestration/` (`orchestrator.py`, `question.py`), `claude-agent-sdk` |
 | **Sprint** | 4 |
 | **Data** | Transcript slice through the question, plus the extracted question. Routes to internal and/or external MCP tools. Does not merge those tools' contexts. Answer is appended to the session transcript |
-| **Network** | Anthropic API over TLS |
+| **Network** | Anthropic API over TLS, through the Claude Code CLI bundled with the SDK |
 
-The Sprint 3 receiver also lives in this package. The Agent SDK itself is still Sprint 4, with stub MCP tools. That SDK instance stays the router when real tools replace the stubs.
+The Sprint 3 receiver also lives in this package. That SDK instance stays the router when real tools replace the stubs. It runs with built-in Claude Code tools off, only the two MCP tools allowed, no filesystem settings, no other MCP servers, and no session persistence.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | Yes | Anthropic API key |
-| `ANTHROPIC_ORCHESTRATION_MODEL` | Yes | Approved model id for the router agent |
+| `ANTHROPIC_ORCHESTRATION_MODEL` | No | Approved model id for the router agent. Defaults to `claude-opus-5-5` |
+
+### MCP tool contract (Sprint 4)
+
+Every internal and external tool implements `backend/tools/contract.py`, so a stub is replaced without changing the orchestrator:
+
+| | |
+| --- | --- |
+| **Server** | One in-process MCP server per tool family: `internal` (`tools/genie_tool/`), `external` (`tools/external_tool/`) |
+| **Tool** | `internal.query_internal_data`, `external.search_external` (allowed as `mcp__<server>__<tool>`) |
+| **Input** | `{"question": string}`, required, no other fields |
+| **Result** | MCP content with one text block, prefixed `[source: <label>]` |
+| **Failure** | Same shape with `"is_error": true`. Tools do not raise and do not log question or result text |
+
+The Sprint 4 stubs return fixed responses. Phase 2 (Genie) and Phase 3 (external agent) keep the server names, tool names and shapes.
 
 ### Anthropic Claude Agent SDK (external intelligence)
 
@@ -285,7 +299,7 @@ Claude built-in web search (Sprint 12) uses the Anthropic key; it does not need 
 | 1 | None (`RUN_LIVE_AUDIO` only for optional local hardware tests) |
 | 2 | `TRIGGER_PHRASE`, `STREAM_BUFFER_SECONDS` |
 | 3 | `BACKEND_*`, TLS paths, `AZURE_SPEECH_*` (continuous STT) |
-| 4 | `ANTHROPIC_API_KEY`, `ANTHROPIC_ORCHESTRATION_MODEL` |
+| 4 | `ANTHROPIC_API_KEY` (`ANTHROPIC_ORCHESTRATION_MODEL` optional) |
 | 5 | `AZURE_SPEECH_TTS_VOICE` (same Speech resource as STT) |
 | 6 | `DATABRICKS_HOST`, `DATABRICKS_STORAGE_*`, catalog/schema/table |
 | 9–10 | `DATABRICKS_GENIE_*`, `DATABRICKS_WAREHOUSE_ID` |

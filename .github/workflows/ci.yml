@@ -50,5 +50,7 @@ jobs:
           pytest tests
           --cov=stt
           --cov=orchestration
+          --cov=tools
           --cov-report=term-missing
           --cov-fail-under=80
+          -m "not integration"

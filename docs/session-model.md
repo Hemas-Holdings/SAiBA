@@ -80,6 +80,8 @@ After orchestration returns an answer:
 
 If TTS fails after the text was appended, the transcript still contains the answer. Do not drop the text because playback failed.
 
+Orchestration runs in the background (Sprint 4). Meeting text keeps landing while an answer is pending, so the assistant turn is appended where the answer arrives, after any meeting text spoken while it was being prepared. An answer that arrives during a pause is dropped rather than appended inside the gap. A phrase with nothing after it but filler is not a question and does not call the orchestrator.
+
 ---
 
 ## Audio and STT placement

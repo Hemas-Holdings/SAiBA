@@ -25,9 +25,16 @@ Living notes for the Board Knowledge Assistant. Expand as later sprints add tran
 - Azure Speech is the production recognizer and hears unpaused session audio. Unit tests use a fake SDK and do not call Azure. Consent must match that posture.
 - The production trigger phrase is still an open Legal/product item.
 
-## Still ahead of this code
+## Orchestration (Sprint 4)
 
-- The assistant response is appended to the same session transcript, then spoken. Orchestration and TTS are not wired yet. The transcript can already store an assistant turn so a later slice includes it.
+- A frozen slice and the question after the phrase are sent to the Anthropic API through the Claude Agent SDK. That is the only data that leaves the backend for orchestration. Raw audio is never sent.
+- The SDK runs locked down: built-in Claude Code tools (files, shell, web) are off, only the internal and external MCP tools are allowed, filesystem settings and other MCP servers are not loaded, and session persistence is off so the CLI does not write the conversation to disk.
+- The system prompt treats the transcript as context, not instructions, to limit injection from what is said in the room.
+- Any SDK failure gives an empty answer, so nothing is appended. Logs record only the error class and result subtype, never the question, slice or answer.
+- Answering runs in the background. Recognition is not paused or awaited. An answer that returns while the session is paused is dropped, because the transcript refuses turns during a pause and nothing is delivered that is not in the transcript.
+- Sprint 4 tools are stubs with fixed responses. They see only the question.
+
+## Still ahead of this code
 - Governed storage stores the running transcript (meeting text + assistant turns + gap markers). No raw audio field. Stop finalizes the session and clears memory after that write.
 
 ## Still in force

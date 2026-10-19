@@ -1,1 +1,1 @@
-"""MCP wrapper for Databricks Genie. Implemented in Phase 2 (Sprint 10)."""
+"""MCP wrapper for internal data. Sprint 4 stub in `server`; Databricks Genie in Phase 2 (Sprint 10)."""
