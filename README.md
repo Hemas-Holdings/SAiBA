@@ -55,7 +55,14 @@ CI runs unit tests on every push and pull request (`.github/workflows/ci.yml`). 
 
 Two processes on one Windows test machine. Settings come from the environment or `--env-file` (see `.env.example`).
 
-Create a local certificate for `127.0.0.1` (self-signed is fine for the gate), then set `TLS_CERT_PATH`, `TLS_KEY_PATH`, `TLS_CA_CERT_PATH` (the same certificate, so the desktop trusts it), `BACKEND_AUTH_TOKEN`, `BACKEND_BASE_URL=wss://127.0.0.1:8443`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `TRIGGER_PHRASE` and `ANTHROPIC_API_KEY`.
+Create a local self-signed certificate for `127.0.0.1` (no openssl needed):
+
+```bash
+cd backend
+python -m tests.devcert ../certs      # writes certs/cert.pem and certs/key.pem
+```
+
+Then set `TLS_CERT_PATH`, `TLS_KEY_PATH`, `TLS_CA_CERT_PATH` (the same certificate, so the desktop trusts it), `BACKEND_AUTH_TOKEN`, `BACKEND_BASE_URL=wss://127.0.0.1:8443`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `TRIGGER_PHRASE` and `ANTHROPIC_API_KEY`.
 
 ```bash
 # console 1: backend (prints the transcript when the session closes)

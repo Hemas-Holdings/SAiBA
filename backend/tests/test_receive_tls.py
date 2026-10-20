@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import os
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from orchestration.receive import ReceiveServer, TokenVerifier, build_server_ssl_context
+from tests.devcert import write_self_signed
 from tests.test_receive import FakeSink
 
 _DESKTOP = Path(__file__).resolve().parents[2] / "desktop-app"
@@ -20,66 +18,8 @@ if str(_DESKTOP) not in sys.path:
 from transport.client import BackendClient, TokenAuth, TransportError, WebSocketConnector  # noqa: E402
 
 
-_GIT_OPENSSL = (
-    r"C:\Program Files\Git\usr\bin\openssl.exe",
-    r"C:\Program Files (x86)\Git\usr\bin\openssl.exe",
-)
-
-
-def _openssl() -> str:
-    """The openssl binary: $OPENSSL, PATH, then Git for Windows. Skips if absent."""
-
-    candidates = [os.environ.get("OPENSSL", ""), shutil.which("openssl") or ""]
-    candidates += list(_GIT_OPENSSL)
-    for candidate in candidates:
-        if candidate and Path(candidate).is_file():
-            return candidate
-    pytest.skip("openssl not found; install Git for Windows or set OPENSSL to openssl.exe")
-
-
 def _write_cert(directory: Path) -> tuple[Path, Path]:
-    cert = directory / "cert.pem"
-    key = directory / "key.pem"
-    config = directory / "openssl.cnf"
-    config.write_text(
-        "\n".join(
-            [
-                "[req]",
-                "distinguished_name=dn",
-                "x509_extensions=v3",
-                "prompt=no",
-                "[dn]",
-                "CN=localhost",
-                "[v3]",
-                "subjectAltName=DNS:localhost,IP:127.0.0.1",
-                "basicConstraints=CA:true",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    subprocess.run(
-        [
-            _openssl(),
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-keyout",
-            str(key),
-            "-out",
-            str(cert),
-            "-days",
-            "1",
-            "-nodes",
-            "-config",
-            str(config),
-            "-extensions",
-            "v3",
-        ],
-        check=True,
-        capture_output=True,
-    )
-    return cert, key
+    return write_self_signed(directory)
 
 
 @pytest.mark.asyncio
