@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +18,23 @@ if str(_DESKTOP) not in sys.path:
     sys.path.append(str(_DESKTOP))
 
 from transport.client import BackendClient, TokenAuth, TransportError, WebSocketConnector  # noqa: E402
+
+
+_GIT_OPENSSL = (
+    r"C:\Program Files\Git\usr\bin\openssl.exe",
+    r"C:\Program Files (x86)\Git\usr\bin\openssl.exe",
+)
+
+
+def _openssl() -> str:
+    """The openssl binary: $OPENSSL, PATH, then Git for Windows. Skips if absent."""
+
+    candidates = [os.environ.get("OPENSSL", ""), shutil.which("openssl") or ""]
+    candidates += list(_GIT_OPENSSL)
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return candidate
+    pytest.skip("openssl not found; install Git for Windows or set OPENSSL to openssl.exe")
 
 
 def _write_cert(directory: Path) -> tuple[Path, Path]:
@@ -40,7 +59,7 @@ def _write_cert(directory: Path) -> tuple[Path, Path]:
     )
     subprocess.run(
         [
-            "openssl",
+            _openssl(),
             "req",
             "-x509",
             "-newkey",
