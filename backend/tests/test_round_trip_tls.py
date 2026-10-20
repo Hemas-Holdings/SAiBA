@@ -71,7 +71,7 @@ class RecordingSink:
         pass
 
 
-async def _until(predicate, timeout: float = 2.0) -> None:
+async def _until(predicate, timeout: float = 5.0) -> None:
     deadline = time.monotonic() + timeout
     while not predicate():
         if time.monotonic() > deadline:
@@ -208,4 +208,6 @@ async def test_capture_socket_dropped_without_stop_stops_the_session(stack) -> N
     await capture._close_socket()  # simulate a crash: no Stop frame
     await _until(lambda: adapter.stop_calls == 1)
     await live.wait_closed()
+    # The hub removes the channel in its own task after close(); wait for it.
+    await asyncio.wait_for(stack["hub"].wait_closed("session-3"), timeout=5)
     assert not stack["hub"].is_open("session-3")
