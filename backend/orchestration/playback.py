@@ -7,6 +7,11 @@ waits for speech. Stop drains the queue: every pending answer is still
 delivered, then `session_end` is sent and the socket is closed. A TTS
 failure sends `answer_error`; the transcript keeps the answer. Text and
 audio are not written to disk or logged. See docs/session-model.md.
+
+The same socket carries window events (`notify`): the trigger cue, the
+question as it is spoken, and the answer text, never other meeting text.
+They are sent at once, not queued behind speech, and dropped when no window
+is subscribed. A per-channel lock keeps event and audio frames whole.
 """
 
 from __future__ import annotations
@@ -50,6 +55,7 @@ class _Channel:
         self.draining = False
         self.task: asyncio.Task[None] | None = None
         self.done = asyncio.Event()
+        self.send_lock = asyncio.Lock()
 
 
 class PlaybackHub:
@@ -68,6 +74,7 @@ class PlaybackHub:
         self._drain_timeout = drain_timeout
         self._channels: dict[str, _Channel] = {}
         self._watchdogs: set[asyncio.Task[None]] = set()
+        self._notices: set[asyncio.Task[None]] = set()
 
     def is_open(self, session_id: str) -> bool:
         return session_id in self._channels
@@ -94,6 +101,26 @@ class PlaybackHub:
             return False
         channel.queue.put_nowait(text)
         return True
+
+    def notify(self, session_id: str, event: dict[str, object]) -> None:
+        """Send one window event now. Never waits; dropped when no window is subscribed."""
+
+        channel = self._channels.get(session_id)
+        if channel is None or channel.subscriber is None:
+            return
+        task = asyncio.create_task(self._send_event(channel, _frame(event)), name="playback-event")
+        self._notices.add(task)
+        task.add_done_callback(self._notices.discard)
+
+    async def _send_event(self, channel: _Channel, frame: str) -> None:
+        async with channel.send_lock:
+            subscriber = channel.subscriber
+            if subscriber is None:
+                return
+            try:
+                await subscriber.send(frame)
+            except Exception as error:  # noqa: BLE001 - the answer path reports a lost socket
+                logger.info("window event not delivered error=%s", type(error).__name__)
 
     def close(self, session_id: str) -> None:
         """Finish the queued answers, then end the session's playback."""
@@ -174,32 +201,35 @@ class PlaybackHub:
             if subscriber is None:
                 continue
             try:
-                await self._speak(subscriber, answer_id, str(item))
+                await self._speak(channel, subscriber, answer_id, str(item))
             except SubscriberGone:
                 self.detach(session_id, subscriber)
                 logger.warning("playback subscriber lost mid-answer")
         subscriber = channel.subscriber
         if subscriber is not None:
             try:
-                await subscriber.send(_frame({"type": "session_end"}))
+                async with channel.send_lock:
+                    await subscriber.send(_frame({"type": "session_end"}))
             except Exception:  # noqa: BLE001
                 logger.warning("playback session_end not delivered")
 
-    async def _speak(self, subscriber: Subscriber, answer_id: int, text: str) -> None:
-        await _send(subscriber, _frame({"type": "answer_start", "answer_id": answer_id, "sample_rate": SAMPLE_RATE}))
+    async def _speak(self, channel: _Channel, subscriber: Subscriber, answer_id: int, text: str) -> None:
+        start = _frame({"type": "answer_start", "answer_id": answer_id, "sample_rate": SAMPLE_RATE})
+        await _send(channel, subscriber, start)
         try:
             async for chunk in self._tts.synthesize(text):
-                await _send(subscriber, chunk)
+                await _send(channel, subscriber, chunk)
         except SynthesisFailed:
-            await _send(subscriber, _frame({"type": "answer_error", "answer_id": answer_id}))
+            await _send(channel, subscriber, _frame({"type": "answer_error", "answer_id": answer_id}))
             return
-        await _send(subscriber, _frame({"type": "answer_end", "answer_id": answer_id}))
+        await _send(channel, subscriber, _frame({"type": "answer_end", "answer_id": answer_id}))
         logger.info("playback answer delivered")
 
 
-async def _send(subscriber: Subscriber, data: str | bytes) -> None:
+async def _send(channel: _Channel, subscriber: Subscriber, data: str | bytes) -> None:
     try:
-        await subscriber.send(data)
+        async with channel.send_lock:
+            await subscriber.send(data)
     except Exception as error:  # noqa: BLE001
         raise SubscriberGone() from error
 

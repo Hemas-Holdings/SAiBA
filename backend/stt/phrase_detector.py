@@ -35,6 +35,12 @@ class PhraseDetector:
         self._tail = ""
         self._inside_gap = False
 
+    @property
+    def phrase(self) -> str:
+        """The configured phrase. Configuration, not transcript text."""
+
+        return self._phrase
+
     def observe(self, transcript_delta: str) -> PhraseHit | None:
         """Return a hit when `transcript_delta` completes the configured phrase."""
 

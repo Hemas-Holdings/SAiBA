@@ -82,7 +82,25 @@ async def test_streamer_does_not_flush_after_send_failure() -> None:
     await _nap()
     binary = [item for item in socket.sent if isinstance(item, bytes)]
     assert binary == [b"\x01\x00"]
+    await _wait_for(lambda: not streamer.forwarding)
     await streamer.stop()
+
+
+@pytest.mark.asyncio
+async def test_forwarding_is_true_through_pause_and_false_after_stop() -> None:
+    socket = FakeSocket()
+    client = BackendClient(FakeConnector(socket))
+    session = FakeSession([b"\x01\x00"])
+    streamer = SessionStreamer(session, client)
+    assert streamer.forwarding is False
+    await streamer.start()
+    assert streamer.forwarding is True
+    await _wait_for(lambda: b"\x01\x00" in socket.sent)
+    await streamer.pause()
+    await _nap()
+    assert streamer.forwarding is True
+    await streamer.stop()
+    assert streamer.forwarding is False
 
 
 @pytest.mark.asyncio

@@ -17,8 +17,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install desktop-app (dev)
-        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+      - name: Install desktop-app (dev + window)
+        run: python -m pip install --upgrade pip && pip install -e ".[dev,gui]"
       - name: Unit tests with coverage gate
         run: >
           pytest tests
@@ -54,6 +54,7 @@ jobs:
           --cov=orchestration
           --cov=tools
           --cov=tts
+          --cov=storage
           --cov-report=term-missing
           --cov-fail-under=80
           -m "not integration"

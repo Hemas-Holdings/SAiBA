@@ -36,6 +36,22 @@ def extract_question(slice: str, phrase_hit: PhraseHit) -> str | None:
     return question
 
 
+def text_after_phrase(text: str, phrase: str) -> str | None:
+    """Text after the last whole-word `phrase` in `text`, or None if it is absent.
+
+    Used for the window's live question display, so nothing said before the
+    phrase is ever passed on. May be empty when the phrase ends the text.
+    """
+
+    phrase_words = words(phrase)
+    if not phrase_words:
+        return None
+    match = _last_match(text, phrase_words)
+    if match is None:
+        return None
+    return " ".join(text[match:].split()).lstrip(" ,.;:!?-–—")
+
+
 def _last_match(text: str, phrase_words: list[str]) -> int | None:
     """Character offset just past the last whole-word phrase match."""
 

@@ -54,6 +54,18 @@ Optional local flag: `RUN_LIVE_AUDIO=1` opts into tests that open real devices. 
 
 ## Desktop app services
 
+### Desktop window — `PySide6-Essentials`, `qasync`
+
+| | |
+| --- | --- |
+| **Status** | Active (optional `gui` extra) |
+| **Package** | `desktop-app/ui/gui.py`, `desktop-app/ui/qml/Main.qml`, logic in `desktop-app/ui/controls.py` |
+| **Data** | Local session state, listening time, whether an answer is playing, an error class name, and the latest question and answer (text after the trigger phrase only, in memory, cleared on Stop). No audio, no other meeting text |
+| **Network** | None. Qt Quick renders locally; the QML loads no remote resources. Buttons are the only input |
+| **Credentials** | None |
+
+`PySide6-Essentials` only (Qt Core, GUI, QML, Quick). The full `PySide6` package is not used because it adds Qt WebEngine, a bundled Chromium. Qt has no usage telemetry. `qasync` runs the existing asyncio session code on the Qt event loop.
+
 ### Session control — local Start / Pause / Resume / Stop
 
 | | |
@@ -219,6 +231,23 @@ A **second** agent instance, not a second set of tools on the orchestrator.
 
 ## Governed storage (write path)
 
+The contract is `backend/storage/board.py` (Sprint 6): an interaction record per answered question and a session record at Stop. No audio field. Implementations: a local folder for development and test (active), and Unity Catalog for production (planned).
+
+### Local folder (development and test only)
+
+| | |
+| --- | --- |
+| **Status** | Active (Sprint 6) |
+| **Package** | `backend/storage/local.py` |
+| **Data** | JSON files per session: `interaction-0001.json`, ..., `session.json`. Transcript text, questions, slices, answers, timestamps, pause gap times. **No audio** |
+| **Access** | Folder locked to the current user before first write; refused if locking fails |
+| **Limits** | Not encrypted. Refused unless `ENVIRONMENT` is `development` or `test`. A folder inside OneDrive is synced to Microsoft's cloud. See security-notes.md |
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `LOCAL_STORAGE_DIR` | No | Absolute path of the storage folder. Empty means nothing is stored |
+| `ENVIRONMENT` | If storage is set | Must be `development` or `test` for local storage |
+
 ### Databricks Unity Catalog
 
 | | |
@@ -301,7 +330,7 @@ Claude built-in web search (Sprint 12) uses the Anthropic key; it does not need 
 | 3 | `BACKEND_*`, TLS paths, `AZURE_SPEECH_*` (continuous STT) |
 | 4 | `ANTHROPIC_API_KEY` (`ANTHROPIC_ORCHESTRATION_MODEL` optional) |
 | 5 | `AZURE_SPEECH_TTS_VOICE` (same Speech resource as STT) |
-| 6 | `DATABRICKS_HOST`, `DATABRICKS_STORAGE_*`, catalog/schema/table |
+| 6 | `LOCAL_STORAGE_DIR` + `ENVIRONMENT` (dev/test local store); later `DATABRICKS_HOST`, `DATABRICKS_STORAGE_*`, catalog/schema/table |
 | 9–10 | `DATABRICKS_GENIE_*`, `DATABRICKS_WAREHOUSE_ID` |
 | 11–12 | `NEWS_API_*` (after vendor approval), `ANTHROPIC_EXTERNAL_MODEL` |
 

@@ -56,3 +56,29 @@ def test_main_exits_2_on_missing_settings(monkeypatch, caplog) -> None:
     with caplog.at_level(logging.ERROR):
         assert entry.main([]) == 2
     assert "missing settings" in caplog.text
+
+
+def test_storage_is_off_unless_a_folder_is_set() -> None:
+    config = entry.load_config(_ENV)
+    assert config.storage_dir is None
+    assert entry.build_storage(config) is None
+
+
+def test_storage_settings_are_read(tmp_path: Path) -> None:
+    config = entry.load_config(dict(_ENV, LOCAL_STORAGE_DIR=f" {tmp_path} ", ENVIRONMENT=" Development "))
+    assert config.storage_dir == str(tmp_path)
+    assert config.environment == "development"
+    store = entry.build_storage(config)
+    assert store is not None and store.root == tmp_path  # type: ignore[attr-defined]
+
+
+def test_local_storage_in_production_stops_startup(tmp_path: Path, monkeypatch, caplog) -> None:
+    config = entry.load_config(dict(_ENV, LOCAL_STORAGE_DIR=str(tmp_path), ENVIRONMENT="production"))
+    with pytest.raises(entry.ConfigError, match="development or test"):
+        entry.build_storage(config)
+
+    for name, value in dict(_ENV, LOCAL_STORAGE_DIR=str(tmp_path), ENVIRONMENT="production").items():
+        monkeypatch.setenv(name, value)
+    with caplog.at_level(logging.ERROR):
+        assert entry.main([]) == 2
+    assert "development or test" in caplog.text

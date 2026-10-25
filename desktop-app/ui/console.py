@@ -14,6 +14,7 @@ import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from capture.audio_format import CHANNELS, SAMPLE_RATE, SAMPLE_WIDTH
 
@@ -120,6 +121,23 @@ class Console:
 def build_streamer(config: ConsoleConfig, mic_only: bool = False) -> tuple[object, Callable[[], None]]:
     """Wire capture, transport and playback. Returns the streamer and a cleanup."""
 
+    streamer, _controller, player = wire_session(config, mic_only)
+    return streamer, player.close
+
+
+def wire_session(
+    config: ConsoleConfig,
+    mic_only: bool = False,
+    on_event: Callable[[dict[str, object]], None] | None = None,
+) -> tuple[Any, Any, Any]:
+    """Wire capture, transport and playback for one session.
+
+    Returns the streamer, the local session controller (for its state), and
+    the answer player (for its speaking flag and cleanup). Shared by the
+    console and the desktop window so both drive a session the same way.
+    `on_event` receives the window's question and answer events.
+    """
+
     from capture.listen import SoundDevicePlaybackSink
     from capture.loopback import LoopbackCapture
     from capture.microphone import MicCapture
@@ -136,6 +154,10 @@ def build_streamer(config: ConsoleConfig, mic_only: bool = False) -> tuple[objec
     controller = SessionController(loopback, MicCapture(), AudioMixer(), StreamBuffer(config.buffer_seconds))
     client = BackendClient(WebSocketConnector(config.base_url, auth, config.server_ca_path))
     player = AudioPlayer(SoundDevicePlaybackSink())
-    playback = PlaybackClient(WebSocketConnector(playback_url(config.base_url), auth, config.server_ca_path), player)
+    playback = PlaybackClient(
+        WebSocketConnector(playback_url(config.base_url), auth, config.server_ca_path),
+        player,
+        on_event=on_event,
+    )
     streamer = SessionStreamer(controller, client, playback=playback, muted=lambda: player.speaking)
-    return streamer, player.close
+    return streamer, controller, player

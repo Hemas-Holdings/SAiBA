@@ -3,7 +3,9 @@
 Holds meeting text, assistant turns, and pause gap markers. Meeting text is
 refused while a pause is open. A phrase hit freezes a slice through the end
 of the question; later meeting text stays on the live transcript and out of
-that slice. Nothing here is written to disk or logged. See
+that slice. Nothing here is written to disk or logged; the governed
+storage write path (`storage/`) receives the rendered text when a question
+is answered and at Stop, after which `clear` drops it. See
 docs/session-model.md.
 """
 
@@ -32,6 +34,7 @@ class SessionTranscript:
         self._previous_utterance = ""
         self._waiting_hit: PhraseHit | None = None
         self._slices: list[tuple[PhraseHit, str]] = []
+        self._gaps: list[tuple[datetime, datetime]] = []
 
     @property
     def is_paused(self) -> bool:
@@ -73,6 +76,21 @@ class SessionTranscript:
             raise ValueError("pause end is before start")
         marker = f"[paused {start:%H:%M}\u2013{end:%H:%M}]"
         self._entries.append(_Entry("gap", marker))
+        self._gaps.append((start, end))
+
+    def pause_gaps(self) -> list[tuple[datetime, datetime]]:
+        """Start and end of every closed pause, in order. Times only, no speech."""
+
+        return list(self._gaps)
+
+    def clear(self) -> None:
+        """Drop everything held for this session. Used after the final governed write."""
+
+        self._entries.clear()
+        self._slices.clear()
+        self._gaps.clear()
+        self._previous_utterance = ""
+        self._waiting_hit = None
 
     def append_assistant(self, text: str) -> None:
         """Append an assistant turn. Refused while paused. Not a speaker label."""

@@ -43,7 +43,7 @@ Fail closed on transport or STT errors: treat like Pause (stop sending audio), s
 
 ## Running transcript
 
-Held **in memory on the backend** for the life of the session. Never written to disk on the desktop. Never logged at INFO or below. The only durable copy is the Unity Catalog write path.
+Held **in memory on the backend** for the life of the session. Never written to disk on the desktop. Never logged at INFO or below. The only durable copy is the governed storage write path: Unity Catalog in production, or, until a workspace exists, a locked local folder in development and test (see [Governed storage](#governed-storage-sprint-6) below).
 
 The transcript is a single ordered log of:
 
@@ -85,10 +85,20 @@ Orchestration runs in the background (Sprint 4). Meeting text keeps landing whil
 ### Spoken delivery (Sprint 5)
 
 - The answer is spoken only after it is in the transcript. The audio comes back on a **separate, receive-only playback socket** (`/playback`), not the capture socket. The desktop subscribes once with its session id and then only receives.
+- The same socket carries **window events** so the room can see the assistant respond: a cue as soon as the trigger phrase is heard (from in-progress recognition), the question live as it is spoken, the final question, and the answer text. Only text after the trigger phrase is sent; no other meeting text reaches the laptop. The cue is display only: analysis still runs only on a certain phrase in a final utterance, and an unconfirmed cue is withdrawn. The window keeps the latest question and answer in memory until the next question and clears them on Stop. See security-notes.md.
 - **Pause and Stop do not cut an answer that is already playing.** They act on capture only. Stop ends recognition at once. Answers still being prepared at Stop finish, are appended, and are spoken; then the backend ends playback for that session.
 - **Capture is muted while an answer plays**, plus a short tail. The desktop sends silence instead of the mix, because loopback records the laptop speaker and the answer would otherwise be transcribed as meeting speech and could set off the trigger. Anything said over the answer is therefore not transcribed. This is not a pause: no gap marker is written.
 - Answers are spoken one at a time, in order. A TTS failure is reported to the desktop; the transcript keeps the answer.
 - If the capture socket drops without Stop, the backend stops that session so nothing keeps listening.
+
+### Governed storage (Sprint 6)
+
+- **After each answered question**, one interaction record is written: the question, the slice it was asked against, the answer, the running transcript at that moment, and a timestamp.
+- **At Stop**, once every answer still being prepared has finished, one session record is written: start and stop times, the number of questions, the pause gaps (start and end times only), and the full running transcript. The transcript is then cleared from memory. A session with no questions is still recorded.
+- Records never contain audio. The contract (`backend/storage/board.py`) has no audio field and refuses binary data in any field.
+- An answer dropped because it arrived during a pause is not stored, just as it is not on the transcript.
+- A storage failure is reported (error class only) and never removes the answer from the transcript or stops the session.
+- **Where records go**: Unity Catalog in production (not yet built). In development and test only, `LOCAL_STORAGE_DIR` points at a local folder; see [security-notes.md](security-notes.md) for that decision and its safeguards. With neither set, nothing is stored.
 
 ---
 

@@ -3,12 +3,22 @@
 Uses `pyaudiowpatch` on Windows to open the default render device's loopback
 endpoint. PCM is converted to the canonical in-memory format and yielded to
 the mixer. This module never writes audio to disk.
+
+WASAPI loopback delivers no data at all while nothing is playing through
+the speakers, so a blocking read would wait forever (and stall the
+microphone behind it in the mixer). Reads therefore never block: when the
+speakers stay silent for one chunk's duration, a chunk of silence stands in
+for them. Read and close share a lock, so Pause or Stop never close the
+device while a read is inside it.
 """
 
 from __future__ import annotations
 
 import logging
 import sys
+import threading
+import time
+from collections.abc import Callable
 from typing import Any
 
 from capture.audio_format import CHANNELS, SAMPLE_RATE, SAMPLE_WIDTH
@@ -20,12 +30,23 @@ logger = logging.getLogger(__name__)
 class PyAudioWPatchBackend:
     """Blocking WASAPI loopback device. Windows-only."""
 
-    def __init__(self) -> None:
+    _POLL_SECONDS = 0.005
+    _RESYNC_SECONDS = 1.0
+
+    def __init__(
+        self,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self.sample_rate = SAMPLE_RATE
         self.channels = CHANNELS
         self.sample_width = SAMPLE_WIDTH
         self._pyaudio: Any = None
         self._stream: Any = None
+        self._clock = clock
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        self._schedule: float | None = None
 
     def open(self) -> None:
         if sys.platform != "win32":
@@ -50,11 +71,57 @@ class PyAudioWPatchBackend:
         )
 
     def read(self, frame_count: int) -> bytes:
+        """Return `frame_count` device frames, waiting at most one chunk's duration.
+
+        If the speakers have produced that many frames, return them. If the
+        chunk's duration passes first, return whatever arrived padded with
+        silence, so capture keeps real time while nothing is playing.
+
+        Silent chunks follow a running schedule (each deadline is the last
+        one plus one chunk), so polling overshoot does not accumulate and
+        loopback keeps pace with the microphone it is mixed with.
+        """
+
+        now = self._clock()
+        if self._schedule is None or now - self._schedule > self._RESYNC_SECONDS:
+            # First read, or capture was paused or stalled: start from now.
+            self._schedule = now
+        deadline = self._schedule + frame_count / self.sample_rate
+        while True:
+            with self._lock:
+                stream = self._require_stream()
+                available = stream.get_read_available()
+                if available >= frame_count:
+                    data = stream.read(frame_count, exception_on_overflow=False)
+                    # The device sets the pace while audio is playing.
+                    self._schedule = self._clock()
+                    return data
+                if self._clock() >= deadline:
+                    self._schedule = deadline
+                    return self._read_padded(stream, available, frame_count)
+            self._sleep(self._POLL_SECONDS)
+
+    def _read_padded(self, stream: Any, available: int, frame_count: int) -> bytes:
+        frame_bytes = self.sample_width * self.channels
+        data = b""
+        if available > 0:
+            data = stream.read(available, exception_on_overflow=False)
+        missing = frame_count * frame_bytes - len(data)
+        # bytes(n) is n zero bytes: digital silence for the frames that did not arrive.
+        return data + bytes(missing)
+
+    def _require_stream(self) -> Any:
         if self._stream is None:
             raise RuntimeError("loopback backend is not open")
-        return self._stream.read(frame_count, exception_on_overflow=False)
+        return self._stream
 
     def close(self) -> None:
+        # Taken with the read lock: the device is never closed mid-read.
+        with self._lock:
+            self._close_locked()
+
+    def _close_locked(self) -> None:
+        self._schedule = None
         if self._stream is not None:
             try:
                 self._stream.stop_stream()

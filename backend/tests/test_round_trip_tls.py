@@ -85,6 +85,8 @@ async def stack(tmp_path: Path):
     tts = GatedTTS()
     hub = PlaybackHub(tts)
     sessions: list[tuple[LiveSession, MemoryAdapter]] = []
+    # Transcripts as handed to on_closed, just before Stop clears them from memory.
+    finals: list[str] = []
 
     def new_session() -> LiveSession:
         adapter = MemoryAdapter()
@@ -94,6 +96,7 @@ async def stack(tmp_path: Path):
             PhraseDetector("board assistant"),
             orchestrator=FakeOrchestrator(),
             delivery=hub,
+            on_closed=lambda transcript: finals.append(transcript.render()),
         )
         sessions.append((live, adapter))
         return live
@@ -114,7 +117,7 @@ async def stack(tmp_path: Path):
         return WebSocketConnector(base + path, TokenAuth(token), server_ca_path=str(cert))
 
     try:
-        yield {"connector": connector, "sessions": sessions, "tts": tts, "hub": hub}
+        yield {"connector": connector, "sessions": sessions, "finals": finals, "tts": tts, "hub": hub}
     finally:
         await server.stop()
         await hub.shutdown()
@@ -154,7 +157,8 @@ async def test_gate_round_trip_pause_and_stop_do_not_cut_the_answer(stack) -> No
 
     assert bytes(sink.data) == b"".join(_TTS_CHUNKS)
     assert playback.ended and playback.answers_played == 1
-    rendered = live.transcript.render()
+    [rendered] = stack["finals"]
+    assert live.transcript.render() == ""
     assert f"Assistant: {_ANSWER}" in rendered
     assert "[paused " in rendered
     assert "secret side conversation" not in rendered

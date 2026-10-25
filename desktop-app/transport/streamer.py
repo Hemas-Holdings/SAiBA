@@ -70,6 +70,12 @@ class SessionStreamer:
         self._forward: asyncio.Task[None] | None = None
         self._playback_task: asyncio.Task[None] | None = None
 
+    @property
+    def forwarding(self) -> bool:
+        """True while audio is being forwarded. False once the link has failed or after Stop."""
+
+        return self._forward is not None and not self._forward.done()
+
     async def start(self) -> SessionState:
         """Start local capture, then the remote session. Capture stops if the link fails."""
 

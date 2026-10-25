@@ -65,21 +65,39 @@ class FakeDelivery:
         self.closed.append(session_id)
 
 
-def _live(orchestrator, delivery=None):
+# The transcript as handed to on_closed, just before Stop clears it from memory.
+_FINAL: dict[int, str] = {}
+
+
+def _keep_final(session_key: list[int]):
+    def on_closed(transcript) -> None:
+        _FINAL[session_key[0]] = transcript.render()
+
+    return on_closed
+
+
+def _live(orchestrator, delivery=None, **options):
     adapter = MemoryAdapter()
+    key: list[int] = []
     session = LiveSession(
         SpeechToText(adapter),
         SessionTranscript(),
         PhraseDetector("board assistant"),
         orchestrator=orchestrator,
         delivery=delivery,
+        on_closed=_keep_final(key),
+        **options,
     )
+    key.append(id(session))
     return session, adapter
 
 
-async def _stop(session) -> None:
+async def _stop(session) -> str:
+    """Stop, wait for answers, and return the transcript as it was at close."""
+
     await session.stop(_T2)
     await session.wait_closed()
+    return _FINAL.pop(id(session))
 
 
 async def _settle() -> None:
@@ -102,10 +120,10 @@ async def test_gate_stub_answer_lands_in_transcript_while_stt_continues(fake_que
         release.set()
         await _settle()
         adapter.emit("after the answer")
-        await _stop(session)
+        final = await _stop(session)
 
     assert asked == ["what was Q3 revenue"]
-    lines = session.transcript.render().splitlines()
+    lines = final.splitlines()
     assistant = [line for line in lines if line.startswith("Assistant: ")]
     assert len(assistant) == 1
     assert "[source: internal data (stub)] Q3 revenue was 12.4 billion rupees" in assistant[0]
@@ -126,9 +144,10 @@ async def test_phrase_without_question_does_not_call_the_agent(fake_query) -> No
     await session.start("session-1")
     adapter.emit("board assistant")
     adapter.emit("um")
-    await _stop(session)
+    final = await _stop(session)
     assert asked == []
-    assert "Assistant:" not in session.transcript.render()
+    assert "Assistant:" not in final
+    assert "board assistant" in final
 
 
 async def test_answer_arriving_during_pause_is_not_appended_or_delivered(fake_query) -> None:
@@ -143,8 +162,9 @@ async def test_answer_arriving_during_pause_is_not_appended_or_delivered(fake_qu
     release.set()
     await _settle()
     await session.resume(_T2)
-    await _stop(session)
-    assert "Assistant:" not in session.transcript.render()
+    final = await _stop(session)
+    assert "Assistant:" not in final
+    assert "[paused " in final
     assert delivery.published == []
 
 
@@ -154,24 +174,17 @@ async def test_delivery_failure_keeps_the_assistant_turn(fake_query) -> None:
     session, adapter = _live(Orchestrator(query=query), FakeDelivery(fail=True))
     await session.start("session-1")
     adapter.emit("board assistant what was Q3 revenue")
-    await _stop(session)
-    assert "Assistant: [source: internal data (stub)]" in session.transcript.render()
+    final = await _stop(session)
+    assert "Assistant: [source: internal data (stub)]" in final
 
 
 async def test_stop_cancels_an_answer_that_never_finishes(fake_query) -> None:
     query, _asked = _stub_backed_query(fake_query, asyncio.Event())
-    adapter = MemoryAdapter()
-    session = LiveSession(
-        SpeechToText(adapter),
-        SessionTranscript(),
-        PhraseDetector("board assistant"),
-        orchestrator=Orchestrator(query=query),
-        answer_timeout=0.01,
-    )
+    session, adapter = _live(Orchestrator(query=query), answer_timeout=0.01)
     await session.start("session-1")
     adapter.emit("board assistant what was Q3 revenue")
-    await _stop(session)
-    assert "Assistant:" not in session.transcript.render()
+    final = await _stop(session)
+    assert "Assistant:" not in final
 
 
 @pytest.mark.integration
@@ -187,7 +200,6 @@ async def test_live_agent_sdk_answers_from_the_stubs() -> None:
     adapter.emit("good morning everyone")
     adapter.emit("board assistant what was Q3 revenue")
     adapter.emit("next item on the agenda")
-    await _stop(session)
-    rendered = session.transcript.render()
+    rendered = await _stop(session)
     assert "Assistant: " in rendered
     assert "12.4" in rendered

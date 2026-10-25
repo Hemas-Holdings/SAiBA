@@ -4,6 +4,8 @@ Desktop capture app plus a private backend that answers board-meeting questions.
 
 Later sprints use local Start / Pause / Resume / Stop, continuous transcription of the unpaused session, and phrase-triggered analysis of the transcript through the question. The assistant reply is written back into that same transcript. See [`docs/session-model.md`](docs/session-model.md).
 
+**To run the backend and desktop app, see [`docs/running-locally.md`](docs/running-locally.md).**
+
 Planning docs are indexed from [`docs/`](docs/). Service catalog and required environment variables: [`docs/integrated-services.md`](docs/integrated-services.md). Copy [`.env.example`](.env.example) to `.env` locally; never commit real values.
 
 ## Layout
@@ -75,6 +77,17 @@ python -m ui --env-file ../.env          # add --mic-only off Windows
 ```
 
 **Gate:** Start, speak, say the trigger phrase and a question; the answer is spoken (once, no echo re-trigger) and appears as an `Assistant:` line. Pause, speak, Resume: the paused speech is missing and a `[paused …]` marker is present. Press Stop while an answer is playing: it finishes. Nothing is written to disk.
+
+### Desktop window
+
+The same session in a window instead of the console. Install the `gui` extra once (`pip install -e ".[gui]"` in `desktop-app/`), then:
+
+```bash
+cd desktop-app
+python -m ui.gui --env-file ../.env      # add --mic-only off Windows
+```
+
+Closing the window during a session stops it first and lets a playing answer finish.
 
 Optional live checks: `pytest -m integration tests/test_tts_live.py` (Azure TTS through the speakers, `RUN_LIVE_AUDIO=1`) and `pytest -m integration tests/test_orchestration_integration.py` (real Agent SDK).
 

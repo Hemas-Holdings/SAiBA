@@ -4,8 +4,10 @@
 
 This is the only place that reads the environment; every class takes its
 settings as arguments. Each capture connection gets its own transcript,
-recognizer and phrase detector. Nothing is written to disk. The transcript
-is printed to the console at the end of a session only with
+recognizer and phrase detector. Audio is never written to disk. Transcript
+text is written only through governed storage, and only when
+LOCAL_STORAGE_DIR is set (development and test; see storage/local.py).
+The transcript is printed to the console at the end of a session only with
 `--print-transcript` (for the Sprint 5 gate); it is never logged.
 """
 
@@ -20,6 +22,10 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from storage.board import BoardStorage
 
 logger = logging.getLogger("orchestration")
 
@@ -51,6 +57,8 @@ class Config:
     tts_voice: str
     trigger_phrase: str
     model: str
+    storage_dir: str | None = None
+    environment: str = ""
 
 
 def load_config(env: Mapping[str, str]) -> Config:
@@ -81,7 +89,23 @@ def load_config(env: Mapping[str, str]) -> Config:
         tts_voice=(env.get("AZURE_SPEECH_TTS_VOICE") or "").strip() or DEFAULT_VOICE,
         trigger_phrase=env["TRIGGER_PHRASE"].strip(),
         model=(env.get("ANTHROPIC_ORCHESTRATION_MODEL") or "").strip() or DEFAULT_MODEL,
+        storage_dir=(env.get("LOCAL_STORAGE_DIR") or "").strip() or None,
+        environment=(env.get("ENVIRONMENT") or "").strip().lower(),
     )
+
+
+def build_storage(config: Config) -> BoardStorage | None:
+    """The governed store, or None when LOCAL_STORAGE_DIR is not set."""
+
+    if config.storage_dir is None:
+        logger.info("governed storage off: LOCAL_STORAGE_DIR is not set")
+        return None
+    from storage.local import LocalBoardStorage, StorageRefused
+
+    try:
+        return LocalBoardStorage(Path(config.storage_dir), config.environment)
+    except StorageRefused as error:
+        raise ConfigError(str(error)) from error
 
 
 def read_env_file(path: Path) -> dict[str, str]:
@@ -97,7 +121,7 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-async def serve(config: Config, print_transcript: bool = False) -> None:
+async def serve(config: Config, print_transcript: bool = False, storage: BoardStorage | None = None) -> None:
     from orchestration.live import LiveSession
     from orchestration.orchestrator import Orchestrator
     from orchestration.playback import PlaybackHub
@@ -141,6 +165,8 @@ async def serve(config: Config, print_transcript: bool = False) -> None:
             orchestrator=orchestrator,
             delivery=hub,
             on_closed=on_closed,
+            storage=storage,
+            events=hub,
         )
 
     server = ReceiveServer(
@@ -185,13 +211,14 @@ def main(argv: list[str] | None = None) -> int:
     env.update({key: value for key, value in os.environ.items() if value})
     try:
         config = load_config(env)
+        storage = build_storage(config)
     except ConfigError as error:
         logger.error("%s", error)
         return 2
     if env.get("ANTHROPIC_API_KEY"):
         os.environ.setdefault("ANTHROPIC_API_KEY", env["ANTHROPIC_API_KEY"])
     try:
-        asyncio.run(serve(config, args.print_transcript))
+        asyncio.run(serve(config, args.print_transcript, storage))
     except KeyboardInterrupt:
         return 0
     return 0

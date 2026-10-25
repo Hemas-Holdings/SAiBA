@@ -1,7 +1,9 @@
 """Continuous speech recognition into final utterance text.
 
-Accepts canonical PCM while a session is running and emits final utterances
-only. Partials are ignored. Pause stops recognition without clearing the
+Accepts canonical PCM while a session is running and emits final
+utterances. In-progress (partial) text goes only to an optional partial
+listener, used for the window's live question display; partials never
+enter the transcript or the stream of finals. Pause stops recognition without clearing the
 caller's transcript. Audio stays in memory; this module does not write files
 or log samples or recognized text. The Azure SDK is imported only when the
 production adapter is constructed without an injected SDK. See
@@ -33,8 +35,9 @@ class SpeechAdapter(Protocol):
         self,
         on_final: Callable[[str], None],
         on_error: Callable[[], None],
+        on_partial: Callable[[str], None] | None = None,
     ) -> None:
-        """Begin continuous recognition."""
+        """Begin continuous recognition. `on_partial` gets in-progress text, if given."""
 
     async def push(self, chunk: bytes) -> None:
         """Push one PCM chunk."""
@@ -71,7 +74,7 @@ class TranscriptStream:
 
 
 class SpeechToText:
-    """Continuous recognition. Finals go to the stream; partials do not."""
+    """Continuous recognition. Finals go to the stream; partials only to a partial listener."""
 
     def __init__(self, adapter: SpeechAdapter) -> None:
         self._adapter = adapter
@@ -80,6 +83,12 @@ class SpeechToText:
         self._stopped = False
         self._stream = TranscriptStream()
         self._listener: Callable[[str], None] | None = None
+        self._partial_listener: Callable[[str], None] | None = None
+
+    def set_partial_listener(self, listener: Callable[[str], None]) -> None:
+        """Receive in-progress text. Not transcript; the listener must not log it."""
+
+        self._partial_listener = listener
 
     def set_listener(self, listener: Callable[[str], None]) -> None:
         """Receive each final utterance. The listener must not log the text."""
@@ -92,7 +101,7 @@ class SpeechToText:
         if self._running:
             raise RuntimeError("recognition is already started")
         self._failed = False
-        await self._adapter.start(self._handle_final, self._handle_error)
+        await self._adapter.start(self._handle_final, self._handle_error, on_partial=self._handle_partial)
         self._running = True
         logger.info("recognition started")
         return self._stream
@@ -150,6 +159,12 @@ class SpeechToText:
         if self._listener is not None:
             self._listener(text)
 
+    def _handle_partial(self, text: str) -> None:
+        if self._failed or not self._running or not text.strip():
+            return
+        if self._partial_listener is not None:
+            self._partial_listener(text)
+
     def _handle_error(self) -> None:
         self._failed = True
         self._running = False
@@ -178,14 +193,17 @@ class AzureSpeechAdapter:
         self._recognizer: Any = None
         self._on_final: Callable[[str], None] | None = None
         self._on_error: Callable[[], None] | None = None
+        self._on_partial: Callable[[str], None] | None = None
 
     async def start(
         self,
         on_final: Callable[[str], None],
         on_error: Callable[[], None],
+        on_partial: Callable[[str], None] | None = None,
     ) -> None:
         self._on_final = on_final
         self._on_error = on_error
+        self._on_partial = on_partial
         sdk = self._sdk_module()
         if self._endpoint:
             config = sdk.SpeechConfig(subscription=self._key, endpoint=self._endpoint)
@@ -204,6 +222,8 @@ class AzureSpeechAdapter:
             audio_config=audio_config,
         )
         self._recognizer.recognized.connect(self._recognized)
+        if on_partial is not None:
+            self._recognizer.recognizing.connect(self._recognizing)
         self._recognizer.canceled.connect(self._canceled)
         await asyncio.to_thread(self._recognizer.start_continuous_recognition)
 
@@ -246,6 +266,15 @@ class AzureSpeechAdapter:
         text = getattr(result, "text", "")
         if text and self._on_final is not None:
             self._on_final(text)
+
+    def _recognizing(self, event: Any) -> None:
+        sdk = self._sdk_module()
+        result = getattr(event, "result", None)
+        if result is None or result.reason != sdk.ResultReason.RecognizingSpeech:
+            return
+        text = getattr(result, "text", "")
+        if text and self._on_partial is not None:
+            self._on_partial(text)
 
     def _canceled(self, event: Any) -> None:
         sdk = self._sdk_module()

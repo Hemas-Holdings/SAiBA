@@ -11,6 +11,7 @@ The product now transcribes the **unpaused session**, not only a triggered quest
 - What is stored after a session / triggered question: the running transcript (meeting text + assistant answers + pause gap markers), the question slice, the answer — never raw audio.
 - That assistant replies are part of the stored transcript and will be used as context for later questions in the same session.
 - Retention period and deletion process for Unity Catalog board-tier records.
+- Development and test builds can store the same records in a locked local folder (see [security-notes.md](security-notes.md)). Those files are not encrypted and may sync to OneDrive. They must not hold real board content without an approved test plan.
 - Who may access those records.
 
 Do not ship a pilot (Sprint 8) without Legal sign-off on this document.

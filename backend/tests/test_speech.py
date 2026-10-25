@@ -34,6 +34,7 @@ class FakePushStream:
 class FakeRecognizer:
     def __init__(self) -> None:
         self.recognized = Signal()
+        self.recognizing = Signal()
         self.canceled = Signal()
         self.started = 0
         self.stopped = 0
@@ -50,7 +51,9 @@ class FakeSDK:
         self.recognizer = FakeRecognizer()
         self.push_stream: FakePushStream | None = None
         self.config: SimpleNamespace | None = None
-        self.ResultReason = SimpleNamespace(RecognizedSpeech="recognized", NoMatch="nomatch")
+        self.ResultReason = SimpleNamespace(
+            RecognizedSpeech="recognized", RecognizingSpeech="recognizing", NoMatch="nomatch"
+        )
         self.CancellationReason = SimpleNamespace(Error="error", EndOfStream="end")
 
     def SpeechConfig(
@@ -113,10 +116,12 @@ class MemoryAdapter:
         self.stop_calls = 0
         self._on_final = None
         self._on_error = None
+        self._on_partial = None
 
-    async def start(self, on_final, on_error) -> None:
+    async def start(self, on_final, on_error, on_partial=None) -> None:
         self._on_final = on_final
         self._on_error = on_error
+        self._on_partial = on_partial
 
     async def push(self, chunk: bytes) -> None:
         self.chunks.append(chunk)
@@ -132,6 +137,10 @@ class MemoryAdapter:
 
     def emit(self, text: str) -> None:
         self._on_final(text)
+
+    def emit_partial(self, text: str) -> None:
+        if self._on_partial is not None:
+            self._on_partial(text)
 
     def fail(self) -> None:
         self._on_error()

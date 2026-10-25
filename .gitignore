@@ -5,6 +5,7 @@ __pycache__/
 *.so
 .Python
 .venv/
+.venv-*/
 venv/
 env/
 *.egg-info/
@@ -25,6 +26,9 @@ htmlcov/
 !.env.example
 *.pem
 *.key
+
+# Local governed storage (board transcripts). Never commit.
+storage-data/
 
 # Audio must never be committed (and capture must never write it)
 *.wav
