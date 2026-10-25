@@ -80,7 +80,7 @@ async def test_interactions_and_session_are_recorded_without_paused_speech(
         await session.pause(_P1)
         adapter.emit("secret side conversation")
         await session.resume(_P2)
-        adapter.emit("board assistant what was revenue")
+        adapter.emit("board assistant what was revenue?")
         await _settle()
         await session.stop(_STOP)
         await session.wait_closed()
@@ -88,10 +88,10 @@ async def test_interactions_and_session_are_recorded_without_paused_speech(
     [interaction] = storage.interactions
     assert interaction.session_id == "session-1"
     assert interaction.sequence == 1
-    assert interaction.question == "what was revenue"
+    assert interaction.question == "what was revenue?"
     assert "board assistant what was revenue" in interaction.question_slice
-    assert interaction.answer == "Answer to: what was revenue"
-    assert "Assistant: Answer to: what was revenue" in interaction.transcript
+    assert interaction.answer == "Answer to: what was revenue?"
+    assert "Assistant: Answer to: what was revenue?" in interaction.transcript
 
     [finished] = storage.sessions
     assert finished.started_at == _START
@@ -99,7 +99,7 @@ async def test_interactions_and_session_are_recorded_without_paused_speech(
     assert finished.interaction_count == 1
     assert finished.pause_gaps == (PauseGap(_P1, _P2),)
     assert "[paused 09:05–09:09]" in finished.transcript
-    assert "Assistant: Answer to: what was revenue" in finished.transcript
+    assert "Assistant: Answer to: what was revenue?" in finished.transcript
 
     for text in (interaction.question_slice, interaction.transcript, finished.transcript):
         assert "secret side conversation" not in text
@@ -153,7 +153,7 @@ async def test_answer_dropped_during_pause_is_not_stored() -> None:
     storage = MemoryStorage()
     session, adapter = _live(storage, SlowOrchestrator())
     await session.start("session-4")
-    adapter.emit("board assistant what was revenue")
+    adapter.emit("board assistant what was revenue?")
     await _settle()
     await session.pause(_P1)
     release.set()
@@ -172,11 +172,11 @@ async def test_storage_failure_keeps_the_answer_and_still_clears_memory(
     session, adapter = _live(storage, seen=seen)
     with caplog.at_level(logging.WARNING):
         await session.start("session-5")
-        adapter.emit("board assistant what was revenue")
+        adapter.emit("board assistant what was revenue?")
         await _settle()
         await session.stop(_STOP)
         await session.wait_closed()
-    assert "Assistant: Answer to: what was revenue" in seen[0]
+    assert "Assistant: Answer to: what was revenue?" in seen[0]
     assert "interaction storage failed error=OSError" in caplog.text
     assert "session storage failed error=OSError" in caplog.text
     assert "disk full" not in caplog.text
@@ -192,8 +192,8 @@ async def test_no_storage_means_nothing_is_recorded_and_sessions_still_work() ->
         orchestrator=Orchestrator(),
     )
     await session.start("session-6")
-    adapter.emit("board assistant what was revenue")
+    adapter.emit("board assistant what was revenue?")
     await _settle()
-    assert "Assistant: Answer to: what was revenue" in session.transcript.render()
+    assert "Assistant: Answer to: what was revenue?" in session.transcript.render()
     await session.stop(_STOP)
     await session.wait_closed()

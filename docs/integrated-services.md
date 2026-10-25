@@ -152,6 +152,7 @@ STT and TTS share one Speech resource. Credentials are constructor arguments on 
 | `AZURE_SPEECH_ENDPOINT` | No | Custom / private endpoint if not the regional default |
 | `AZURE_SPEECH_LANGUAGE` | No | Recognition locale, default `en-US` |
 | `AZURE_SPEECH_TTS_VOICE` | No | Neural voice name, e.g. `en-US-JennyNeural` |
+| `AZURE_SPEECH_PHRASES` | No | Comma-separated names Azure should expect (e.g. `Hemas,Hemas Holdings`); the trigger phrase is added automatically. Sent to Azure as recognition hints |
 
 ---
 

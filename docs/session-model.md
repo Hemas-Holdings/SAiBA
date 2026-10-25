@@ -66,6 +66,8 @@ When the phrase is recognized with certainty:
 3. Send **that text** to the orchestrator. Do not send raw audio of the whole meeting as the analysis payload.
 4. Do not wait for the answer before continuing STT.
 
+**Unfinished questions.** People pause mid-question and recognition splits the sentence. If the utterance holding the phrase does not end in "?", the question is held for a short grace period (1.5 s). If speech resumes in that time (seen in in-progress recognition), the next final utterance joins the question; otherwise it is answered as it stands. A held question is never closed during a pause; the wait restarts on Resume, and a question still held at Stop is answered. In-progress text is used only to see that speech resumed; it never enters the slice.
+
 The slice for a later question includes earlier assistant turns, because those turns are already in the session transcript.
 
 ---

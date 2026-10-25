@@ -113,7 +113,7 @@ async def test_gate_stub_answer_lands_in_transcript_while_stt_continues(fake_que
     with caplog.at_level(logging.DEBUG):
         await session.start("session-1")
         adapter.emit("good morning everyone")
-        adapter.emit("board assistant what was Q3 revenue")
+        adapter.emit("board assistant what was Q3 revenue?")
         await _settle()
         adapter.emit("while we wait, next item")
         assert "Assistant:" not in session.transcript.render()
@@ -122,7 +122,7 @@ async def test_gate_stub_answer_lands_in_transcript_while_stt_continues(fake_que
         adapter.emit("after the answer")
         final = await _stop(session)
 
-    assert asked == ["what was Q3 revenue"]
+    assert asked == ["what was Q3 revenue?"]
     lines = final.splitlines()
     assistant = [line for line in lines if line.startswith("Assistant: ")]
     assert len(assistant) == 1
@@ -156,7 +156,7 @@ async def test_answer_arriving_during_pause_is_not_appended_or_delivered(fake_qu
     delivery = FakeDelivery()
     session, adapter = _live(Orchestrator(query=query), delivery)
     await session.start("session-1")
-    adapter.emit("board assistant what was Q3 revenue")
+    adapter.emit("board assistant what was Q3 revenue?")
     await _settle()
     await session.pause(_T1)
     release.set()
@@ -173,7 +173,7 @@ async def test_delivery_failure_keeps_the_assistant_turn(fake_query) -> None:
 
     session, adapter = _live(Orchestrator(query=query), FakeDelivery(fail=True))
     await session.start("session-1")
-    adapter.emit("board assistant what was Q3 revenue")
+    adapter.emit("board assistant what was Q3 revenue?")
     final = await _stop(session)
     assert "Assistant: [source: internal data (stub)]" in final
 
@@ -182,7 +182,7 @@ async def test_stop_cancels_an_answer_that_never_finishes(fake_query) -> None:
     query, _asked = _stub_backed_query(fake_query, asyncio.Event())
     session, adapter = _live(Orchestrator(query=query), answer_timeout=0.01)
     await session.start("session-1")
-    adapter.emit("board assistant what was Q3 revenue")
+    adapter.emit("board assistant what was Q3 revenue?")
     final = await _stop(session)
     assert "Assistant:" not in final
 
@@ -198,7 +198,7 @@ async def test_live_agent_sdk_answers_from_the_stubs() -> None:
     session, adapter = _live(Orchestrator())
     await session.start("session-1")
     adapter.emit("good morning everyone")
-    adapter.emit("board assistant what was Q3 revenue")
+    adapter.emit("board assistant what was Q3 revenue?")
     adapter.emit("next item on the agenda")
     rendered = await _stop(session)
     assert "Assistant: " in rendered

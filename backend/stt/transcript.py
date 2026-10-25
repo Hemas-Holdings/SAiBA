@@ -33,6 +33,8 @@ class SessionTranscript:
         self._pause_start: datetime | None = None
         self._previous_utterance = ""
         self._waiting_hit: PhraseHit | None = None
+        # True when the held question already has words (phrase was not last).
+        self._waiting_has_words = False
         self._slices: list[tuple[PhraseHit, str]] = []
         self._gaps: list[tuple[datetime, datetime]] = []
 
@@ -91,6 +93,7 @@ class SessionTranscript:
         self._gaps.clear()
         self._previous_utterance = ""
         self._waiting_hit = None
+        self._waiting_has_words = False
 
     def append_assistant(self, text: str) -> None:
         """Append an assistant turn. Refused while paused. Not a speaker label."""
@@ -99,11 +102,25 @@ class SessionTranscript:
             return
         self._entries.append(_Entry("assistant", text.strip()))
 
-    def observe_utterance(self, text: str, hit: PhraseHit | None) -> PhraseHit | None:
+    @property
+    def question_may_continue(self) -> bool:
+        """A question has started but may go on in the next utterance."""
+
+        return self._waiting_hit is not None and self._waiting_has_words
+
+    def observe_utterance(
+        self,
+        text: str,
+        hit: PhraseHit | None,
+        hold_unfinished: bool = False,
+    ) -> PhraseHit | None:
         """Append a final utterance and maybe freeze the question slice.
 
         Returns the hit whose slice was frozen by this utterance, else None.
         Recognition is not stopped here. A gap does not close a question.
+        With `hold_unfinished`, a question that does not end in "?" is held
+        open: the next utterance joins it, or the caller closes it with
+        `close_held_question`.
         """
 
         if self._paused or not text.strip():
@@ -114,16 +131,32 @@ class SessionTranscript:
             frozen = self._waiting_hit
             self._freeze(frozen)
             self._waiting_hit = None
+            self._waiting_has_words = False
             self._previous_utterance = text
             return frozen
         if hit is not None:
-            if _closes_now(self._previous_utterance, text, hit.phrase):
+            if not _closes_now(self._previous_utterance, text, hit.phrase):
+                self._waiting_hit = hit
+            elif hold_unfinished and not text.rstrip().endswith("?"):
+                self._waiting_hit = hit
+                self._waiting_has_words = True
+            else:
                 frozen = hit
                 self._freeze(hit)
-            else:
-                self._waiting_hit = hit
         self._previous_utterance = text
         return frozen
+
+    def close_held_question(self) -> PhraseHit | None:
+        """Freeze a held question as it stands (no continuation came). None if none is held."""
+
+        if not self.question_may_continue or self._paused:
+            return None
+        hit = self._waiting_hit
+        assert hit is not None
+        self._freeze(hit)
+        self._waiting_hit = None
+        self._waiting_has_words = False
+        return hit
 
     def slice_through_question(self, phrase_hit: PhraseHit) -> str | None:
         """Return the frozen slice, or None if that question has not ended."""

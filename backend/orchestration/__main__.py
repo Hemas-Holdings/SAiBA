@@ -64,6 +64,7 @@ class Config:
     external_domains: tuple[str, ...] = ()
     external_max_uses: int = 5
     external_model: str = ""
+    speech_phrases: tuple[str, ...] = ()
 
 
 def load_config(env: Mapping[str, str]) -> Config:
@@ -97,7 +98,26 @@ def load_config(env: Mapping[str, str]) -> Config:
         storage_dir=(env.get("LOCAL_STORAGE_DIR") or "").strip() or None,
         environment=(env.get("ENVIRONMENT") or "").strip().lower(),
         **_external_settings(env),
+        speech_phrases=_speech_phrases(env),
     )
+
+
+def _speech_phrases(env: Mapping[str, str]) -> tuple[str, ...]:
+    """Names Azure should expect: AZURE_SPEECH_PHRASES plus the trigger phrase."""
+
+    phrases: list[str] = []
+    raw = (env.get("AZURE_SPEECH_PHRASES") or "").split(",") + [env.get("TRIGGER_PHRASE") or ""]
+    for item in raw:
+        phrase = " ".join(item.split())
+        if not phrase:
+            continue
+        if len(phrase) > 100:
+            raise ConfigError("AZURE_SPEECH_PHRASES entries must be 100 characters or fewer")
+        if phrase.casefold() not in {existing.casefold() for existing in phrases}:
+            phrases.append(phrase)
+    if len(phrases) > 100:
+        raise ConfigError("AZURE_SPEECH_PHRASES may list at most 100 phrases")
+    return tuple(phrases)
 
 
 def _external_settings(env: Mapping[str, str]) -> dict[str, object]:
@@ -207,6 +227,7 @@ async def serve(config: Config, print_transcript: bool = False, storage: BoardSt
                 config.speech_region,
                 language=config.speech_language,
                 endpoint=config.speech_endpoint,
+                phrases=config.speech_phrases,
             )
         )
         return LiveSession(

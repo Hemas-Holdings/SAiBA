@@ -19,12 +19,18 @@ and the answer. Only text after the trigger phrase is ever sent, never the
 rest of the meeting. The cue may come from in-progress recognition, so the
 window reacts at once; analysis still runs only on a certain phrase in a
 final utterance, and a cue the final does not confirm is cancelled.
+
+A question that does not end in "?" is held briefly, because people pause
+mid-question and recognition splits it: if speech resumes within the grace
+period, the next utterance joins the question; otherwise it is answered as
+it stands. In-progress recognition is used only to tell that speech resumed.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Protocol
@@ -77,6 +83,8 @@ class LiveSession:
         storage: BoardStorage | None = None,
         clock: Callable[[], datetime] | None = None,
         events: SessionEvents | None = None,
+        question_grace: float = 1.5,
+        continuation_timeout: float = 8.0,
     ) -> None:
         self._speech = speech
         self._transcript = transcript
@@ -101,6 +109,12 @@ class LiveSession:
         self._cue = False
         self._awaiting_question = False
         self._question_id = 0
+        # Held-question timer (session loop only) and the lock that keeps the
+        # recognizer thread and the timer from freezing the same question twice.
+        self._question_grace = question_grace
+        self._continuation_timeout = continuation_timeout
+        self._hold_timer: asyncio.TimerHandle | None = None
+        self._freeze_lock = threading.Lock()
         self.speech = speech
         self.transcript = transcript
 
@@ -111,8 +125,9 @@ class LiveSession:
         if self._delivery is not None:
             self._delivery.open(session_id)
         self._speech.set_listener(self._on_final)
-        if self._events is not None:
-            self._speech.set_partial_listener(self._on_partial)
+        # In-progress text drives the window cue and tells a held question that
+        # speech resumed. It never enters the transcript or analysis.
+        self._speech.set_partial_listener(self._on_partial)
         stream = await self._speech.start_session()
         self._reader = asyncio.create_task(self._drain(stream), name="live-transcript")
         logger.info("live session recognition started")
@@ -124,6 +139,8 @@ class LiveSession:
         await self._speech.pause()
         self._transcript.begin_pause(at)
         self._pause_open = True
+        # A held question stays held across a pause; its timer restarts on Resume.
+        self._cancel_hold()
         if self._cue and not self._awaiting_question:
             self._cue = False
             self._emit({"type": "trigger_cancelled", "question_id": self._question_id})
@@ -134,6 +151,8 @@ class LiveSession:
             self._transcript.end_pause(at)
             self._pause_open = False
         await self._speech.resume()
+        if self._transcript.question_may_continue:
+            self._arm_hold(self._question_grace)
         logger.info("live session resumed")
 
     async def stop(self, at: datetime) -> None:
@@ -146,6 +165,9 @@ class LiveSession:
         self._reader = None
         if reader is not None:
             await reader
+        # A question still held at Stop is answered as it stands.
+        self._cancel_hold()
+        self._close_held()
         # Do not hold up the Stop reply: answers finish in the background.
         self._closing = asyncio.create_task(self._close_after_answers(), name="live-close")
         logger.info("live session stopped")
@@ -188,15 +210,23 @@ class LiveSession:
     def _on_final(self, text: str) -> None:
         if self._transcript.is_paused:
             return
-        hit = self._detector.observe(text)
-        frozen = self._transcript.observe_utterance(text, hit)
+        with self._freeze_lock:
+            hit = self._detector.observe(text)
+            frozen = self._transcript.observe_utterance(
+                text, hit, hold_unfinished=self._orchestrator is not None
+            )
+            held = self._transcript.question_may_continue
         logger.info("final utterance observed certain=%s", hit is not None)
         if self._loop is None:
             return
         if self._events is not None:
             self._loop.call_soon_threadsafe(self._final_cue, hit is not None, frozen is not None)
+        if held and frozen is None:
+            # Unfinished question: wait briefly for the rest of it.
+            self._loop.call_soon_threadsafe(self._arm_hold, self._question_grace)
         if frozen is None or self._orchestrator is None:
             return
+        self._loop.call_soon_threadsafe(self._cancel_hold)
         transcript_slice = self._transcript.slice_through_question(frozen)
         if transcript_slice is None:
             return
@@ -206,7 +236,42 @@ class LiveSession:
     def _on_partial(self, text: str) -> None:
         # Azure delivers partials on its own thread; handle them on the session loop.
         if self._loop is not None:
-            self._loop.call_soon_threadsafe(self._partial_cue, text)
+            self._loop.call_soon_threadsafe(self._partial_on_loop, text)
+
+    def _partial_on_loop(self, text: str) -> None:
+        if self._hold_timer is not None and not self._transcript.is_paused:
+            # Speech resumed: the next final joins the held question. Keep a
+            # longer fallback in case that speech never becomes a final.
+            self._arm_hold(self._continuation_timeout)
+        if self._events is not None:
+            self._partial_cue(text)
+
+    def _arm_hold(self, delay: float) -> None:
+        self._cancel_hold()
+        if self._loop is not None:
+            self._hold_timer = self._loop.call_later(delay, self._hold_expired)
+
+    def _cancel_hold(self) -> None:
+        timer = self._hold_timer
+        self._hold_timer = None
+        if timer is not None:
+            timer.cancel()
+
+    def _hold_expired(self) -> None:
+        self._hold_timer = None
+        self._close_held()
+
+    def _close_held(self) -> None:
+        """Answer a held question as it stands."""
+
+        with self._freeze_lock:
+            hit = self._transcript.close_held_question()
+            transcript_slice = self._transcript.slice_through_question(hit) if hit is not None else None
+        if hit is None or transcript_slice is None or self._orchestrator is None:
+            return
+        self._cue = False
+        self._awaiting_question = False
+        self._schedule_answer(transcript_slice, hit)
 
     def _partial_cue(self, text: str) -> None:
         """Window cue only. In-progress text never reaches the transcript or analysis."""

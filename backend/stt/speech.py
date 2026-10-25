@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
@@ -181,6 +181,7 @@ class AzureSpeechAdapter:
         language: str = "en-US",
         endpoint: str | None = None,
         sdk: Any = None,
+        phrases: Sequence[str] = (),
     ) -> None:
         if not key or not region:
             raise ValueError("speech key and region are required")
@@ -189,6 +190,8 @@ class AzureSpeechAdapter:
         self._language = language or "en-US"
         self._endpoint = endpoint or None
         self._sdk = sdk
+        # Names Azure should expect (company, trigger phrase). Configuration, not transcript.
+        self._phrases = tuple(phrase for phrase in phrases if phrase.strip())
         self._push: Any = None
         self._recognizer: Any = None
         self._on_final: Callable[[str], None] | None = None
@@ -221,6 +224,10 @@ class AzureSpeechAdapter:
             speech_config=config,
             audio_config=audio_config,
         )
+        if self._phrases:
+            grammar = sdk.PhraseListGrammar.from_recognizer(self._recognizer)
+            for phrase in self._phrases:
+                grammar.addPhrase(phrase)
         self._recognizer.recognized.connect(self._recognized)
         if on_partial is not None:
             self._recognizer.recognizing.connect(self._recognizing)
