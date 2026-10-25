@@ -8,6 +8,8 @@ version = "0.1.0"
 description = "Backend orchestration, speech, tools, and storage for the Board Knowledge Assistant"
 requires-python = ">=3.11"
 dependencies = [
+    # External intelligence agent (opt-in web search). Same vendor as the orchestrator.
+    "anthropic>=2.3,<3",
     "azure-cognitiveservices-speech>=1.40",
     "claude-agent-sdk>=0.2.168,<0.3",
     "websockets>=13,<16",

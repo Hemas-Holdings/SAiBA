@@ -90,6 +90,11 @@ TRIGGER_PHRASE=<the phrase that starts a question>
 ANTHROPIC_API_KEY=<key, on one line>
 ANTHROPIC_ORCHESTRATION_MODEL=
 
+# External tool: live web search on trusted sites (optional; off by default)
+EXTERNAL_SEARCH_ENABLED=true
+EXTERNAL_SEARCH_ALLOWED_DOMAINS=bloomberg.com,cnbc.com,cse.lk,cbsl.gov.lk,economynext.com,ft.lk,dailymirror.lk,sundaytimes.lk,newsfirst.lk,imf.org,worldbank.org
+EXTERNAL_SEARCH_MAX_USES=5
+
 # Transcript storage (optional; development and test only)
 ENVIRONMENT=development
 LOCAL_STORAGE_DIR=C:\path\to\saiba\storage-data

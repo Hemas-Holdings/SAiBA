@@ -86,6 +86,17 @@ Known limits, accepted for development use:
 - There is no retention or deletion schedule; delete session folders by hand. Retention for real records is still open with Legal ([consent.md](consent.md)).
 - Do not use this with real board content outside an approved test. Production storage remains Unity Catalog with board-tier ACL.
 
+## External intelligence: web search (Phase 3, 2026-10-26)
+
+The project owner chose to connect the external tool to live web search, opt-in and limited to a trusted domain list.
+
+- **A separate agent.** `tools/external_tool/agent.py` runs its own Claude conversation per question through the Messages API. It receives only the question string the orchestrator passes to `external.search_external`. It never sees the transcript or internal (Genie) results, and nothing it sees is shared back except its answer text.
+- **What leaves.** That question goes to the Anthropic API and is turned into search queries run by Anthropic's search provider. The orchestrator's system prompt tells it to give the external tool only a self-contained public question and never internal figures, names, plans, meeting content or internal-tool results. This is an instruction to the model, not a code-level filter: review real questions in the pilot.
+- **Enforced limits.** The only tool is server-side web search with `allowed_domains` (the trusted list) and `max_uses` (searches per question), both enforced by the API. There are no file, shell or page-fetch tools and no subprocess. Search results are treated as information, not instructions.
+- **Off by default.** Nothing is searched unless `EXTERNAL_SEARCH_ENABLED=true`, and enabling it without a domain list stops the backend at startup. Bad domains, flags or limits also stop startup.
+- **Failure is contained.** Refusals, unfinished searches and API errors return an MCP error result; the orchestrator says it could not answer. Logs record only the reason or error class and the number of sources, never the question, queries, results or answer.
+- **Sources.** With the current search tool, answers carry no citations, so the tool reports the sites it searched ("Searched: …"), not proof of which page supports which fact. The agent is told to name the publication and date for each fact.
+
 ## Still ahead of this code
 - Unity Catalog implementation of the same storage contract, with board-tier ACL and a write-only credential separate from the Genie read token.
 

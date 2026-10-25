@@ -188,21 +188,25 @@ Every internal and external tool implements `backend/tools/contract.py`, so a st
 
 The Sprint 4 stubs return fixed responses. Phase 2 (Genie) and Phase 3 (external agent) keep the server names, tool names and shapes.
 
-### Anthropic Claude Agent SDK (external intelligence)
+### Anthropic Messages API (external intelligence agent)
 
 | | |
 | --- | --- |
-| **Status** | Planned |
-| **Package** | `backend/tools/external_tool/` |
-| **Sprint** | 12 |
-| **Data** | Public/news context only. Must never receive Genie results |
-| **Network** | Anthropic API plus web search / standing feed |
+| **Status** | Active, opt-in (`EXTERNAL_SEARCH_ENABLED=true`); the stub answers otherwise |
+| **Package** | `backend/tools/external_tool/` (`agent.py` `WebResearcher`, `server.py`), `anthropic` Python SDK |
+| **Sprint** | 12 (web search part; the standing news feed is still vendor TBD) |
+| **Data** | Only the question the orchestrator passes to `external.search_external`. Never the transcript, never Genie results |
+| **Network** | Anthropic Messages API with the server-side `web_search_20260209` tool. The question becomes search queries run by Anthropic's search provider |
+| **Limits** | Trusted domains only (`allowed_domains`) and a per-question search cap (`max_uses`), both enforced by the API. No file, shell or page-fetch tools |
 
-A **second** agent instance, not a second set of tools on the orchestrator.
+A **second** agent instance with its own context, not a second set of tools on the orchestrator. It uses the Messages API rather than a second Agent SDK instance so the domain list and search cap are enforced by the API, not left to the model, and no local tools or CLI subprocess exist.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `ANTHROPIC_EXTERNAL_MODEL` | Yes (Phase 3) | Approved model id for the external agent |
+| `EXTERNAL_SEARCH_ENABLED` | No | `true` turns on web search for the external tool; default off |
+| `EXTERNAL_SEARCH_ALLOWED_DOMAINS` | If enabled | Comma-separated plain domains. Sites that block Anthropic's crawler (Reuters, AP, BBC, Economist, FT, WSJ) make the API reject the request, so leave them out |
+| `EXTERNAL_SEARCH_MAX_USES` | No | Searches per question, 1–20, default 5 |
+| `ANTHROPIC_EXTERNAL_MODEL` | No | Model id for the external agent. Defaults to `claude-opus-5-5` |
 
 `ANTHROPIC_API_KEY` is shared unless security later requires a dedicated key.
 

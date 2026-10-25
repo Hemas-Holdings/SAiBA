@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from storage.board import BoardStorage
+    from tools.external_tool.agent import WebResearcher
 
 logger = logging.getLogger("orchestration")
 
@@ -59,6 +60,10 @@ class Config:
     model: str
     storage_dir: str | None = None
     environment: str = ""
+    external_enabled: bool = False
+    external_domains: tuple[str, ...] = ()
+    external_max_uses: int = 5
+    external_model: str = ""
 
 
 def load_config(env: Mapping[str, str]) -> Config:
@@ -91,6 +96,52 @@ def load_config(env: Mapping[str, str]) -> Config:
         model=(env.get("ANTHROPIC_ORCHESTRATION_MODEL") or "").strip() or DEFAULT_MODEL,
         storage_dir=(env.get("LOCAL_STORAGE_DIR") or "").strip() or None,
         environment=(env.get("ENVIRONMENT") or "").strip().lower(),
+        **_external_settings(env),
+    )
+
+
+def _external_settings(env: Mapping[str, str]) -> dict[str, object]:
+    """Opt-in web search for the external tool. Off unless EXTERNAL_SEARCH_ENABLED=true."""
+
+    from tools.external_tool.agent import DEFAULT_MAX_SEARCHES, DEFAULT_MODEL, parse_domains
+
+    flag = (env.get("EXTERNAL_SEARCH_ENABLED") or "").strip().lower()
+    if flag not in ("", "false", "true"):
+        raise ConfigError("EXTERNAL_SEARCH_ENABLED must be true or false")
+    enabled = flag == "true"
+    try:
+        domains = parse_domains(env.get("EXTERNAL_SEARCH_ALLOWED_DOMAINS") or "")
+    except ValueError as exc:
+        raise ConfigError(f"EXTERNAL_SEARCH_ALLOWED_DOMAINS: {exc}") from exc
+    if enabled and not domains:
+        raise ConfigError("EXTERNAL_SEARCH_ALLOWED_DOMAINS is required when external search is enabled")
+    try:
+        max_uses = int(env.get("EXTERNAL_SEARCH_MAX_USES") or DEFAULT_MAX_SEARCHES)
+    except ValueError as exc:
+        raise ConfigError("EXTERNAL_SEARCH_MAX_USES must be a number") from exc
+    if not 1 <= max_uses <= 20:
+        raise ConfigError("EXTERNAL_SEARCH_MAX_USES must be between 1 and 20")
+    return {
+        "external_enabled": enabled,
+        "external_domains": domains,
+        "external_max_uses": max_uses,
+        "external_model": (env.get("ANTHROPIC_EXTERNAL_MODEL") or "").strip() or DEFAULT_MODEL,
+    }
+
+
+def build_external(config: Config) -> WebResearcher | None:
+    """The external web researcher, or None to keep the stub."""
+
+    if not config.external_enabled:
+        logger.info("external search off: using the stub external tool")
+        return None
+    from tools.external_tool.agent import WebResearcher
+
+    logger.info("external search on domains=%d", len(config.external_domains))
+    return WebResearcher(
+        config.external_domains,
+        model=config.external_model,
+        max_searches=config.external_max_uses,
     )
 
 
@@ -131,7 +182,7 @@ async def serve(config: Config, print_transcript: bool = False, storage: BoardSt
     from stt.transcript import SessionTranscript
     from tts.speech import AzureSpeechSynthesisAdapter, TextToSpeech
 
-    orchestrator = Orchestrator(model=config.model)
+    orchestrator = Orchestrator(model=config.model, external=build_external(config))
     hub = PlaybackHub(
         TextToSpeech(
             AzureSpeechSynthesisAdapter(
